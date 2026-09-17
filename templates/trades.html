@@ -31,7 +31,9 @@
   <div><button type="submit">Filter</button></div>
 </form>
 
-<p class="muted">{{ rows|length }} trade(s) shown (most recent 500). Click a row for full indicator values.</p>
+<p class="muted">{{ rows|length }} trade(s) shown (most recent 500). Click a timestamp for the
+indicator snapshot; open "All rules" on a row for every gate/rule evaluated that
+run, not just the one that produced this trade.</p>
 
 <div class="scroll-x">
 <table>
@@ -39,7 +41,7 @@
     <tr>
       <th>Timestamp</th><th>Ticker</th><th>Action</th><th>Type</th>
       <th>Order EUR</th><th>Price</th><th>Avg price</th><th>P/L %</th><th>Reason</th>
-      <th>Rule 1</th><th>Rule 2</th><th>Rule 3</th><th>Confidence</th>
+      <th>Rule 1</th><th>Rule 2</th><th>Rule 3</th><th>Confidence</th><th>All rules</th>
     </tr>
   </thead>
   <tbody>
@@ -58,9 +60,35 @@
       <td>{% if r['rule2_fired'] is not none %}<span class="badge {% if r['rule2_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule2_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule3_fired'] is not none %}<span class="badge {% if r['rule3_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule3_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{{ "%.1f%%"|format(r['confidence_pct']) if r['confidence_pct'] is not none else "" }}</td>
+      <td>
+        {% set rules = all_rules.get(r['id'], []) %}
+        {% if rules %}
+        <details>
+          <summary>{{ rules|length }} rule groups</summary>
+          <div class="rules-breakdown">
+            {% for grp in rules %}
+            <div class="rule-group">
+              <strong class="{% if grp.fired %}ok-text{% else %}bad-text{% endif %}">
+                {{ grp.label }} — {{ 'PASSED' if grp.fired else 'blocked' }}
+              </strong>
+              <ul>
+                {% for c in grp.conditions %}
+                <li class="{% if c.passed %}ok-text{% else %}bad-text{% endif %}">
+                  {{ '✓' if c.passed else '✗' }} {{ c.name }}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endfor %}
+          </div>
+        </details>
+        {% else %}
+        <span class="muted">-</span>
+        {% endif %}
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="13" class="muted">No trades logged yet.</td></tr>
+    <tr><td colspan="14" class="muted">No trades logged yet.</td></tr>
     {% endfor %}
   </tbody>
 </table>

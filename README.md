@@ -111,9 +111,12 @@ Local only (binds to `127.0.0.1`, not exposed to your network). Four pages:
 
 - **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
   that actually got logged, including which of Rule 1/2/3 individually fired and
-  the computed confidence % for every BUY row; click a row for the full
-  indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime) that was true at
-  that moment.
+  the computed confidence % for every BUY row. Each row also has an "All rules"
+  expander showing every named condition evaluated that run - buy eligibility
+  gates, all Rule 1/2/3 conditions, the confidence check, all 4 exit rules,
+  market regime, and portfolio risk gates (~30 individually-named checks) - not
+  just the one that produced this trade. Click a timestamp for the raw
+  indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime).
 - **Decisions** — every rule the bot evaluated, every run, fired or not — not
   just the ones that resulted in a trade. Shows whether a rule *fired* (its own
   conditions were true) and whether it *executed* (a fired rule can still be

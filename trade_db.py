@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS trades (
     rule1_fired INTEGER,
     rule2_fired INTEGER,
     rule3_fired INTEGER,
-    confidence_pct REAL
+    confidence_pct REAL,
+    run_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -93,7 +94,9 @@ CREATE TABLE IF NOT EXISTS decisions (
     volume REAL,
     avg_volume20 REAL,
     atr14 REAL,
-    trade_id INTEGER
+    trade_id INTEGER,
+    run_id TEXT,
+    conditions_json TEXT
 );
 """
 
@@ -104,6 +107,9 @@ _MIGRATIONS = [
     "ALTER TABLE trades ADD COLUMN rule2_fired INTEGER",
     "ALTER TABLE trades ADD COLUMN rule3_fired INTEGER",
     "ALTER TABLE trades ADD COLUMN confidence_pct REAL",
+    "ALTER TABLE trades ADD COLUMN run_id TEXT",
+    "ALTER TABLE decisions ADD COLUMN run_id TEXT",
+    "ALTER TABLE decisions ADD COLUMN conditions_json TEXT",
     "ALTER TABLE position_state ADD COLUMN simulated_open INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE position_state ADD COLUMN last_known_avg_price REAL",
     "ALTER TABLE position_state ADD COLUMN close_reason TEXT",
@@ -264,3 +270,15 @@ def recent_decisions(conn: sqlite3.Connection, ticker: str = "", side: str = "",
     query += " ORDER BY timestamp DESC, id DESC LIMIT ?"
     params.append(limit)
     return conn.execute(query, params).fetchall()
+
+
+def decisions_for_run(conn: sqlite3.Connection, run_id: str, ticker: str) -> list[sqlite3.Row]:
+    """Every rule/gate evaluated for one ticker in one run - the full breakdown
+    behind a single trade row, buy and sell side together, in evaluation order."""
+    if not run_id:
+        return []
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        "SELECT * FROM decisions WHERE run_id = ? AND ticker = ? ORDER BY id",
+        (run_id, ticker),
+    ).fetchall()

@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sys
 import time
@@ -104,11 +105,40 @@ def get_auth_header() -> str:
     return t212.basic_auth_header(api_key, api_secret)
 
 
+def _rule_result(rule: str, label: str, conditions: list[tuple[str, bool]], **extra) -> dict:
+    """conditions: list of (unique_name, passed). Every condition is kept (not
+    just failures) so the full breakdown is always available - see
+    TRADING_RULES.md > Buy Rules - Confidence Scoring Model and the web UI's
+    Trades page "Show all rules" panel."""
+    fired = all(passed for _, passed in conditions)
+    fraction = (sum(1 for _, passed in conditions if passed) / len(conditions)) if conditions else 0.0
+    blocks = [name for name, passed in conditions if not passed]
+    return {"rule": rule, "label": label, "fired": fired, "fraction": fraction,
+            "blocks": blocks, "conditions": conditions, **extra}
+
+
+def market_regime_decision(regime: dict) -> dict:
+    conditions = [
+        ("Market - SPY > SMA200", regime["spy_price"] > regime["spy_sma200"] if regime["spy_sma200"] else False),
+        ("Market - SPY SMA50 > SMA200", (regime["spy_sma50"] > regime["spy_sma200"])
+                                         if regime["spy_sma50"] and regime["spy_sma200"] else False),
+    ]
+    return _rule_result("market", "Market Regime (SPY)", conditions)
+
+
+def portfolio_gates_decision(drawdown_pct: float, daily_loss_pct: float, exposure_headroom: float) -> dict:
+    conditions = [
+        ("Portfolio - Drawdown Below Stop (8%)", drawdown_pct < DRAWDOWN_STOP_PCT),
+        ("Portfolio - Daily Loss Below Limit (1.5%)", daily_loss_pct < DAILY_LOSS_LIMIT_PCT),
+        ("Portfolio - Exposure Headroom Available", exposure_headroom > 0),
+    ]
+    return _rule_result("portfolio", "Portfolio Risk Gates", conditions)
+
+
 def evaluate_exit(position: dict, snap: dict, pstate: dict, bull_market: bool) -> list[dict]:
-    """Returns exit decisions in priority order. Each dict has: rule, label,
-    fired, sell_fraction (fraction of whatever remains after earlier fires this
-    run), blocks. Stops early (doesn't evaluate further rules) once a rule
-    closes the whole position, since nothing would be left to sell."""
+    """Returns exit decisions in priority order, each a _rule_result(). Stops
+    early (doesn't evaluate further rules) once a rule closes the whole
+    position, since nothing would be left to sell."""
     avg_price = position["averagePrice"]
     current_price = position["currentPrice"]
     profit_pct = (current_price / avg_price - 1) * 100 if avg_price else 0.0
@@ -116,80 +146,60 @@ def evaluate_exit(position: dict, snap: dict, pstate: dict, bull_market: bool) -
     decisions = []
 
     # Exit Rule 1 - Emergency Stop (highest priority, overrides everything else)
-    emergency_fired = profit_pct <= -EMERGENCY_STOP_LOSS_PCT
-    decisions.append({
-        "rule": "exit1", "label": "Exit Rule 1 - Emergency Stop", "fired": emergency_fired,
-        "sell_fraction": 1.0, "profit_pct": profit_pct, "closes_position": True,
-        "blocks": [] if emergency_fired else [f"loss {profit_pct:.1f}% above -{EMERGENCY_STOP_LOSS_PCT:.0f}% threshold"],
-    })
-    if emergency_fired:
+    exit1 = _rule_result("exit1", "Exit Rule 1 - Emergency Stop",
+                          [("Exit 1 - Loss >= 7%", profit_pct <= -EMERGENCY_STOP_LOSS_PCT)],
+                          sell_fraction=1.0, profit_pct=profit_pct, closes_position=True)
+    decisions.append(exit1)
+    if exit1["fired"]:
         return decisions
 
     # Exit Rule 4 - Trailing Stop (only relevant if already armed by Rule 3 previously)
-    if pstate["trailing_stop_active"]:
+    armed = bool(pstate["trailing_stop_active"])
+    if armed:
         highest = max(pstate["trailing_stop_highest_price"] or price, price)
         atr14 = snap["atr14"]
-        triggered = atr14 is not None and price <= (highest - TRAILING_STOP_ATR_MULT * atr14)
         trailing_level = (highest - TRAILING_STOP_ATR_MULT * atr14) if atr14 is not None else None
-        decisions.append({
-            "rule": "exit4", "label": "Exit Rule 4 - Trailing Stop", "fired": triggered,
-            "sell_fraction": 1.0, "profit_pct": profit_pct, "closes_position": True,
-            "highest": highest, "trailing_level": trailing_level,
-            "blocks": [] if triggered else
-                      [f"price {price:.2f} above trailing stop {trailing_level:.2f}" if trailing_level is not None else "ATR unavailable"],
-        })
-        if triggered:
-            return decisions
+        triggered = trailing_level is not None and price <= trailing_level
     else:
-        decisions.append({"rule": "exit4", "label": "Exit Rule 4 - Trailing Stop", "fired": False,
-                           "sell_fraction": 1.0, "closes_position": True, "blocks": ["not armed"]})
+        highest = trailing_level = None
+        triggered = False
+    exit4 = _rule_result("exit4", "Exit Rule 4 - Trailing Stop", [
+        ("Exit 4 - Trailing Stop Armed", armed),
+        ("Exit 4 - Price <= Trailing Level", triggered),
+    ], sell_fraction=1.0, profit_pct=profit_pct, closes_position=True, highest=highest, trailing_level=trailing_level)
+    exit4["fired"] = armed and triggered  # both conditions must hold, not "all conditions true" (armed=False shouldn't count as N/A pass)
+    decisions.append(exit4)
+    if exit4["fired"]:
+        return decisions
 
     # Exit Rule 2 - Bull Market Profit (once per position instance)
-    rule2_blocks = []
-    if not bull_market:
-        rule2_blocks.append("bull market filter = FALSE")
-    if profit_pct < BULL_PROFIT_PCT:
-        rule2_blocks.append(f"profit {profit_pct:.1f}% below {BULL_PROFIT_PCT:.0f}% threshold")
-    if pstate["bull_profit_lock"]:
-        rule2_blocks.append("bull profit lock already used for this position")
-    decisions.append({"rule": "exit2", "label": "Exit Rule 2 - Bull Market Profit", "fired": not rule2_blocks,
-                       "sell_fraction": BULL_PROFIT_SELL_FRACTION, "profit_pct": profit_pct,
-                       "closes_position": False, "blocks": rule2_blocks})
+    exit2 = _rule_result("exit2", "Exit Rule 2 - Bull Market Profit", [
+        ("Exit 2 - Bull Market Required", bull_market),
+        ("Exit 2 - Profit >= 3%", profit_pct >= BULL_PROFIT_PCT),
+        ("Exit 2 - Profit Lock Available", not pstate["bull_profit_lock"]),
+    ], sell_fraction=BULL_PROFIT_SELL_FRACTION, profit_pct=profit_pct, closes_position=False)
+    decisions.append(exit2)
 
     # Exit Rule 3 - Breakout Profit (arms the trailing stop; only fires once per instance)
-    rule3_blocks = []
-    if profit_pct < BREAKOUT_PROFIT_PCT:
-        rule3_blocks.append(f"profit {profit_pct:.1f}% below {BREAKOUT_PROFIT_PCT:.0f}% threshold")
     prev_high = snap.get("prev_20d_high")
-    if prev_high is None or not (price > prev_high):
-        rule3_blocks.append(f"price {price:.2f} not above prior 20d high ({prev_high})")
     avg_vol = snap.get("avg_volume20")
-    if avg_vol is None or not (snap["volume"] > BREAKOUT_VOLUME_MULT * avg_vol):
-        rule3_blocks.append(f"volume not >= {BREAKOUT_VOLUME_MULT}x 20d average")
-    if pstate["trailing_stop_active"]:
-        rule3_blocks.append("trailing stop already armed for this position")
-    decisions.append({"rule": "exit3", "label": "Exit Rule 3 - Breakout Profit", "fired": not rule3_blocks,
-                       "sell_fraction": BREAKOUT_SELL_FRACTION, "profit_pct": profit_pct,
-                       "closes_position": False, "arms_trailing_stop": True, "blocks": rule3_blocks})
+    exit3 = _rule_result("exit3", "Exit Rule 3 - Breakout Profit", [
+        ("Exit 3 - Profit >= 10%", profit_pct >= BREAKOUT_PROFIT_PCT),
+        ("Exit 3 - Price > Prior 20D High", prev_high is not None and price > prev_high),
+        ("Exit 3 - Volume >= 1.5x Avg", avg_vol is not None and snap["volume"] > BREAKOUT_VOLUME_MULT * avg_vol),
+        ("Exit 3 - Trailing Stop Not Already Armed", not pstate["trailing_stop_active"]),
+    ], sell_fraction=BREAKOUT_SELL_FRACTION, profit_pct=profit_pct, closes_position=False, arms_trailing_stop=True)
+    decisions.append(exit3)
 
     return decisions
 
 
-def _rule_score(conditions: list[tuple[bool, str]]) -> tuple[bool, float, list[str]]:
-    """conditions: list of (is_true, description). Returns (all_true, fraction_true, failed_descriptions)."""
-    true_count = sum(1 for ok, _ in conditions if ok)
-    failed = [desc for ok, desc in conditions if not ok]
-    fraction = true_count / len(conditions) if conditions else 0.0
-    return (not failed), fraction, failed
-
-
 def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bool,
                   pstate: dict, conn, today: str) -> list[dict]:
-    """Returns [rule1_component, rule2_component, rule3_component, confidence_decision].
-    The three components are informational only (fired = that rule's own full
-    condition set was true) - see TRADING_RULES.md > Buy Rules - Confidence
-    Scoring Model for why they no longer trigger independent buys. Only the
-    'confidence' decision actually executes."""
+    """Returns [gates, rule1, rule2, rule3, confidence]. gates/rule1/rule2/rule3
+    are informational only (fired = that rule's own full condition set was
+    true) - see TRADING_RULES.md > Buy Rules - Confidence Scoring Model for why
+    they no longer trigger independent buys. Only 'confidence' executes."""
     price = snap["price"]
 
     position_value = (position["quantity"] * position["currentPrice"]) if position else 0.0
@@ -207,18 +217,13 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
 
     # Eligibility gates: portfolio/position state, not technical signal. All must
     # pass or nothing buys regardless of confidence score (Buy Protection rules).
-    gate_blocks = []
-    if not bull_market:
-        gate_blocks.append("bull market filter = FALSE")
-    if position_value >= MAX_POSITION_PER_STOCK:
-        gate_blocks.append(f"position already at/above max (EUR{position_value:.2f} >= EUR{MAX_POSITION_PER_STOCK:.0f})")
-    if not not_losing:
-        pl_pct = (position["currentPrice"] / avg_price - 1) * 100
-        gate_blocks.append(f"position is losing ({pl_pct:+.1f}%)")
-    if not cooldown_ok:
-        gate_blocks.append(f"buy cooldown active (last buy {last_buy_ts})")
-    if not emergency_cooldown_ok:
-        gate_blocks.append(f"emergency-stop re-entry cooldown until {pstate['emergency_stop_until']}")
+    gates = _rule_result("gates", "Buy Eligibility Gates", [
+        ("Gate - Bull Market Required", bull_market),
+        ("Gate - Position Below Max", position_value < MAX_POSITION_PER_STOCK),
+        ("Gate - Position Not Losing", not_losing),
+        ("Gate - Buy Cooldown Expired", cooldown_ok),
+        ("Gate - Emergency-Stop Cooldown Expired", emergency_cooldown_ok),
+    ])
 
     price_above_ema20 = snap["ema20"] is not None and price > snap["ema20"]
     price_above_sma50 = snap["sma50"] is not None and price > snap["sma50"]
@@ -227,51 +232,45 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
     macd_above_signal = snap["macd"] is not None and snap["macd_signal"] is not None and snap["macd"] > snap["macd_signal"]
     macd_hist_positive = snap["macd_histogram"] is not None and snap["macd_histogram"] > 0
 
-    rule1_conditions = [
-        (price_above_ema20, "price not above EMA20"),
-        (price_above_sma50, "price not above SMA50"),
-        (sma50_above_sma200, "SMA50 not above SMA200"),
-    ]
-    rule2_conditions = [
-        (rsi_in_range, f"RSI14 not in [{RSI_BUY_MIN:g},{RSI_BUY_MAX:g}] (RSI14={snap['rsi14']})"),
-        (price_above_ema20, "price not above EMA20"),
-        (price_above_sma50, "price not above SMA50"),
-        (sma50_above_sma200, "SMA50 not above SMA200"),
-    ]
-    rule3_conditions = [
-        (macd_above_signal, "MACD not above signal"),
-        (macd_hist_positive, "MACD histogram not positive"),
-        (price_above_ema20, "price not above EMA20"),
-        (price_above_sma50, "price not above SMA50"),
-        (sma50_above_sma200, "SMA50 not above SMA200"),
-    ]
+    rule1 = _rule_result("rule1", "Buy Rule 1 - Trend", [
+        ("Rule 1 - Price > EMA20", price_above_ema20),
+        ("Rule 1 - Price > SMA50", price_above_sma50),
+        ("Rule 1 - SMA50 > SMA200", sma50_above_sma200),
+        ("Rule 1 - No Earnings Within 3 Days (not enforced)", True),
+        ("Rule 1 - Spread <= 0.5% (not enforced)", True),
+    ])
+    rule2 = _rule_result("rule2", "Buy Rule 2 - RSI", [
+        (f"Rule 2 - RSI14 In Range [{RSI_BUY_MIN:g},{RSI_BUY_MAX:g}]", rsi_in_range),
+        ("Rule 2 - Price > EMA20", price_above_ema20),
+        ("Rule 2 - Price > SMA50", price_above_sma50),
+        ("Rule 2 - SMA50 > SMA200", sma50_above_sma200),
+    ])
+    rule3 = _rule_result("rule3", "Buy Rule 3 - MACD", [
+        ("Rule 3 - MACD > Signal", macd_above_signal),
+        ("Rule 3 - MACD Histogram > 0", macd_hist_positive),
+        ("Rule 3 - Price > EMA20", price_above_ema20),
+        ("Rule 3 - Price > SMA50", price_above_sma50),
+        ("Rule 3 - SMA50 > SMA200", sma50_above_sma200),
+    ])
 
-    rule1_fired, rule1_frac, rule1_failed = _rule_score(rule1_conditions)
-    rule2_fired, rule2_frac, rule2_failed = _rule_score(rule2_conditions)
-    rule3_fired, rule3_frac, rule3_failed = _rule_score(rule3_conditions)
-
+    # Only the trend/momentum conditions feed the weighted score - eligibility
+    # gates are a separate hard pass/fail, not part of the 0-100% gradient.
     total_weight = RULE1_WEIGHT_PCT + RULE2_WEIGHT_PCT + RULE3_WEIGHT_PCT
-    weighted = (rule1_frac * RULE1_WEIGHT_PCT) + (rule2_frac * RULE2_WEIGHT_PCT) + (rule3_frac * RULE3_WEIGHT_PCT)
+    weighted = (rule1["fraction"] * RULE1_WEIGHT_PCT) + (rule2["fraction"] * RULE2_WEIGHT_PCT) + (rule3["fraction"] * RULE3_WEIGHT_PCT)
     confidence_pct = (weighted / total_weight * 100) if total_weight else 0.0
 
-    confidence_blocks = list(gate_blocks)
-    if confidence_pct < CONFIDENCE_THRESHOLD_PCT:
-        confidence_blocks.append(f"confidence {confidence_pct:.1f}% below {CONFIDENCE_THRESHOLD_PCT:.0f}% threshold")
-    confidence_fired = not confidence_blocks
+    confidence = _rule_result("confidence", "Confidence Buy Rule",
+                               [("Confidence - Score >= Threshold", confidence_pct >= CONFIDENCE_THRESHOLD_PCT)],
+                               base_amount=CONFIDENCE_BUY_AMOUNT, confidence_pct=confidence_pct,
+                               rule1_fired=rule1["fired"], rule2_fired=rule2["fired"], rule3_fired=rule3["fired"])
+    confidence["fired"] = confidence["fired"] and gates["fired"]
+    confidence["blocks"] = gates["blocks"] + confidence["blocks"]
 
-    return [
-        {"rule": "rule1", "label": "Buy Rule 1 - Trend", "fired": rule1_fired, "blocks": rule1_failed},
-        {"rule": "rule2", "label": "Buy Rule 2 - RSI", "fired": rule2_fired, "blocks": rule2_failed},
-        {"rule": "rule3", "label": "Buy Rule 3 - MACD", "fired": rule3_fired, "blocks": rule3_failed},
-        {"rule": "confidence", "label": "Confidence Buy Rule", "fired": confidence_fired,
-         "base_amount": CONFIDENCE_BUY_AMOUNT, "blocks": confidence_blocks,
-         "confidence_pct": confidence_pct, "rule1_fired": rule1_fired,
-         "rule2_fired": rule2_fired, "rule3_fired": rule3_fired},
-    ]
+    return [gates, rule1, rule2, rule3, confidence]
 
 
 def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict,
-             qty: float, amount: float, bull_market: bool) -> int:
+             qty: float, amount: float, bull_market: bool, run_id: str) -> int:
     return trade_db.record_trade(
         conn,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -284,12 +283,12 @@ def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict
         rsi14=snap["rsi14"], macd=snap["macd"], macd_signal=snap["macd_signal"],
         macd_histogram=snap["macd_histogram"], volume=snap["volume"],
         avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], spread_pct=None,
-        reason=d["label"], order_result="DRY_RUN", dry_run=1,
+        reason=d["label"], order_result="DRY_RUN", dry_run=1, run_id=run_id,
     )
 
 
 def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d: dict,
-            amount: float, bull_market: bool) -> int:
+            amount: float, bull_market: bool, run_id: str) -> int:
     return trade_db.record_trade(
         conn,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -303,7 +302,7 @@ def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d
         rsi14=snap["rsi14"], macd=snap["macd"], macd_signal=snap["macd_signal"],
         macd_histogram=snap["macd_histogram"], volume=snap["volume"],
         avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], spread_pct=None,
-        reason=d["label"], order_result="DRY_RUN", dry_run=1,
+        reason=d["label"], order_result="DRY_RUN", dry_run=1, run_id=run_id,
         rule1_fired=int(d["rule1_fired"]), rule2_fired=int(d["rule2_fired"]), rule3_fired=int(d["rule3_fired"]),
         confidence_pct=d["confidence_pct"],
     )
@@ -311,7 +310,8 @@ def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d
 
 def log_decision(conn, ticker: str, symbol: str, snap: dict, side: str, d: dict,
                   fired: bool, executed: bool, amount: float | None, blocks: list[str],
-                  bull_market: bool, trade_id: int | None = None) -> None:
+                  bull_market: bool, run_id: str, trade_id: int | None = None) -> None:
+    conditions = d.get("conditions") or []
     trade_db.record_decision(
         conn,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -322,13 +322,15 @@ def log_decision(conn, ticker: str, symbol: str, snap: dict, side: str, d: dict,
         sma20=snap["sma20"], ema20=snap["ema20"], sma50=snap["sma50"], sma200=snap["sma200"],
         rsi14=snap["rsi14"], macd=snap["macd"], macd_signal=snap["macd_signal"],
         macd_histogram=snap["macd_histogram"], volume=snap["volume"],
-        avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], trade_id=trade_id,
+        avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], trade_id=trade_id, run_id=run_id,
+        conditions_json=json.dumps([{"name": n, "passed": bool(p)} for n, p in conditions]),
     )
 
 
 def main() -> None:
     auth_header = get_auth_header()
     today = time.strftime("%Y-%m-%d")
+    run_id = time.strftime("%Y-%m-%dT%H:%M:%S")
     conn = trade_db.get_conn()
 
     cash = t212.fetch_cash(t212.LIVE_BASE, auth_header)
@@ -393,6 +395,11 @@ def main() -> None:
                  "source wired up). See TRADING_RULES.md > Known Implementation Gaps.")
     lines.append("")
 
+    # Same for every ticker this run - computed once, logged per ticker so each
+    # trade's full rule breakdown (market + portfolio + buy/exit) is self-contained.
+    market_dec = market_regime_decision(regime)
+    portfolio_dec = portfolio_gates_decision(drawdown_pct, daily_loss_pct, exposure_headroom)
+
     watchlist = load_watchlist()
     would_buy_total = 0.0
     would_sell_total = 0.0
@@ -416,6 +423,11 @@ def main() -> None:
 
         lines.append(f"{ticker} ({symbol})  price={snap['price']:.2f}  "
                      f"position=EUR{(position['quantity']*position['currentPrice']) if position else 0:.2f}")
+
+        log_decision(conn, ticker, symbol, snap, "BUY", market_dec, fired=market_dec["fired"], executed=False,
+                     amount=None, blocks=market_dec["blocks"], bull_market=bull_market, run_id=run_id)
+        log_decision(conn, ticker, symbol, snap, "BUY", portfolio_dec, fired=portfolio_dec["fired"], executed=False,
+                     amount=None, blocks=portfolio_dec["blocks"], bull_market=bull_market, run_id=run_id)
 
         # --- Exit rules first: risk management overrides trading signals ---
         position_closed_today = False
@@ -445,7 +457,7 @@ def main() -> None:
                 if not d["fired"]:
                     lines.append(f"    {d['label']}: no (" + "; ".join(d["blocks"]) + ")")
                     log_decision(conn, ticker, symbol, snap, "SELL", d, fired=False, executed=False,
-                                 amount=None, blocks=d["blocks"], bull_market=bull_market)
+                                 amount=None, blocks=d["blocks"], bull_market=bull_market, run_id=run_id)
                     continue
 
                 sell_frac_of_original = remaining_fraction * d["sell_fraction"]
@@ -453,9 +465,9 @@ def main() -> None:
                 amount = qty * position["currentPrice"]
                 lines.append(f"    {d['label']}: SELL {d['sell_fraction']*100:.0f}% of remaining "
                              f"(EUR{amount:.2f}, dry run)")
-                trade_id = log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market)
+                trade_id = log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market, run_id)
                 log_decision(conn, ticker, symbol, snap, "SELL", d, fired=True, executed=True,
-                             amount=amount, blocks=[], bull_market=bull_market, trade_id=trade_id)
+                             amount=amount, blocks=[], bull_market=bull_market, run_id=run_id, trade_id=trade_id)
                 would_sell_total += amount
                 remaining_fraction *= (1 - d["sell_fraction"])
 
@@ -489,6 +501,12 @@ def main() -> None:
         remaining_stock_cap = MAX_STOCK_BUY_PER_DAY - trade_db.daily_stock_buy_total(conn, ticker, today)
         buy_decisions = {d["rule"]: d for d in evaluate_buy(ticker, position, snap, bull_market, pstate, conn, today)}
 
+        gates = buy_decisions["gates"]
+        lines.append(f"    {gates['label']}: {'yes' if gates['fired'] else 'no'}"
+                     + (f" ({'; '.join(gates['blocks'])})" if gates["blocks"] else ""))
+        log_decision(conn, ticker, symbol, snap, "BUY", gates, fired=gates["fired"], executed=False,
+                     amount=None, blocks=gates["blocks"], bull_market=bull_market, run_id=run_id)
+
         # Rule 1/2/3 no longer trigger independent buys - each is just a
         # component of the weighted confidence score below. Still logged for
         # visibility (see TRADING_RULES.md > Buy Rules - Confidence Scoring Model).
@@ -497,7 +515,7 @@ def main() -> None:
             lines.append(f"    {comp['label']}: {'yes' if comp['fired'] else 'no'}"
                          + (f" ({'; '.join(comp['blocks'])})" if comp["blocks"] else ""))
             log_decision(conn, ticker, symbol, snap, "BUY", comp, fired=comp["fired"], executed=False,
-                         amount=None, blocks=comp["blocks"], bull_market=bull_market)
+                         amount=None, blocks=comp["blocks"], bull_market=bull_market, run_id=run_id)
 
         d = buy_decisions["confidence"]
         confidence_note = f"confidence {d['confidence_pct']:.1f}% (threshold {CONFIDENCE_THRESHOLD_PCT:.0f}%)"
@@ -506,7 +524,7 @@ def main() -> None:
         if not d["fired"]:
             lines.append(f"        no buy (" + "; ".join(d["blocks"]) + ")")
             log_decision(conn, ticker, symbol, snap, "BUY", d, fired=False, executed=False,
-                         amount=None, blocks=[confidence_note] + d["blocks"], bull_market=bull_market)
+                         amount=None, blocks=[confidence_note] + d["blocks"], bull_market=bull_market, run_id=run_id)
         else:
             gate_blocks = []
             if position_closed_today:
@@ -516,7 +534,7 @@ def main() -> None:
             if gate_blocks:
                 lines.append(f"        WOULD fire, but blocked - " + "; ".join(gate_blocks))
                 log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
-                             amount=None, blocks=[confidence_note] + gate_blocks, bull_market=bull_market)
+                             amount=None, blocks=[confidence_note] + gate_blocks, bull_market=bull_market, run_id=run_id)
             else:
                 amount = min(d["base_amount"] * buy_multiplier, remaining_stock_cap, remaining_portfolio_cap)
                 if amount <= 0:
@@ -525,12 +543,12 @@ def main() -> None:
                     lines.append(f"        WOULD fire, but no budget left "
                                  f"(stock cap left EUR{remaining_stock_cap:.2f}, portfolio cap left EUR{remaining_portfolio_cap:.2f})")
                     log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
-                                 amount=None, blocks=[confidence_note] + budget_blocks, bull_market=bull_market)
+                                 amount=None, blocks=[confidence_note] + budget_blocks, bull_market=bull_market, run_id=run_id)
                 else:
                     lines.append(f"        BUY EUR{amount:.2f} (dry run)")
-                    trade_id = log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market)
+                    trade_id = log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market, run_id)
                     log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=True,
-                                 amount=amount, blocks=[confidence_note], bull_market=bull_market, trade_id=trade_id)
+                                 amount=amount, blocks=[confidence_note], bull_market=bull_market, run_id=run_id, trade_id=trade_id)
                     remaining_stock_cap -= amount
                     remaining_portfolio_cap -= amount
                     would_buy_total += amount

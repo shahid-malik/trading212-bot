@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 from pathlib import Path
 
@@ -83,9 +84,25 @@ def trades():
 
     rows = conn.execute(query, params).fetchall()
     tickers = [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM trades ORDER BY ticker").fetchall()]
+
+    # Full rule breakdown per row: every gate/rule evaluated for that ticker in
+    # that same bot run, not just the one that produced this trade.
+    all_rules = {}
+    for row in rows:
+        if not row["run_id"]:
+            continue
+        decisions = trade_db.decisions_for_run(conn, row["run_id"], row["ticker"])
+        all_rules[row["id"]] = [
+            {
+                "label": d["label"],
+                "fired": bool(d["fired"]),
+                "conditions": json.loads(d["conditions_json"]) if d["conditions_json"] else [],
+            }
+            for d in decisions
+        ]
     conn.close()
 
-    return render_template("trades.html", rows=rows, tickers=tickers,
+    return render_template("trades.html", rows=rows, tickers=tickers, all_rules=all_rules,
                             ticker=ticker, action=action, run_type=run_type)
 
 

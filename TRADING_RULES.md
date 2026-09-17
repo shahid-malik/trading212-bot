@@ -36,6 +36,20 @@ This is bookkeeping for the *simulation's own consistency*, not a claim that it
 tracks a parallel paper portfolio precisely — partial-sell amounts in the report
 are computed off your real, unaffected position size each run.
 
+### Full condition-level logging
+
+Every individual named condition across every gate and rule is evaluated and
+logged every run, whether it passed or not - not just the ones that failed.
+Each condition has a unique, fully-qualified name (e.g. `Rule 1 - Price >
+EMA20` vs `Rule 3 - Price > EMA20` are logged separately even though they
+check the same thing, because each rule's own condition set is independent).
+This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3 (5+4+5, including the
+2 unenforced Rule 1 conditions), the Confidence check, Market Regime (2),
+Portfolio Risk Gates (3), and all 4 Exit Rules (1+2+3+4) - around 30 named
+checks per ticker per run. All runs from one execution of `trading_bot.py`
+share a `run_id`, so the web UI's Trades page can show the complete breakdown
+behind any single trade, not just the rule that fired.
+
 ## Capital
 
 - Starting capital: €1,000
