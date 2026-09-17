@@ -233,8 +233,8 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
 
 
 def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict,
-             qty: float, amount: float, bull_market: bool) -> None:
-    trade_db.record_trade(
+             qty: float, amount: float, bull_market: bool) -> int:
+    return trade_db.record_trade(
         conn,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
         ticker=ticker, yahoo_symbol=symbol, action="SELL",
@@ -251,8 +251,8 @@ def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict
 
 
 def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d: dict,
-            amount: float, bull_market: bool) -> None:
-    trade_db.record_trade(
+            amount: float, bull_market: bool) -> int:
+    return trade_db.record_trade(
         conn,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
         ticker=ticker, yahoo_symbol=symbol, action="BUY",
@@ -266,6 +266,23 @@ def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d
         macd_histogram=snap["macd_histogram"], volume=snap["volume"],
         avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], spread_pct=None,
         reason=d["label"], order_result="DRY_RUN", dry_run=1,
+    )
+
+
+def log_decision(conn, ticker: str, symbol: str, snap: dict, side: str, d: dict,
+                  fired: bool, executed: bool, amount: float | None, blocks: list[str],
+                  bull_market: bool, trade_id: int | None = None) -> None:
+    trade_db.record_decision(
+        conn,
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        ticker=ticker, yahoo_symbol=symbol, side=side, rule=d["rule"], label=d["label"],
+        fired=int(fired), executed=int(executed), amount_eur=amount,
+        blocks="; ".join(blocks) if blocks else None,
+        price=snap["price"], spy_regime="bull" if bull_market else "bear",
+        sma20=snap["sma20"], ema20=snap["ema20"], sma50=snap["sma50"], sma200=snap["sma200"],
+        rsi14=snap["rsi14"], macd=snap["macd"], macd_signal=snap["macd_signal"],
+        macd_histogram=snap["macd_histogram"], volume=snap["volume"],
+        avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], trade_id=trade_id,
     )
 
 
@@ -387,6 +404,8 @@ def main() -> None:
             for d in exit_decisions:
                 if not d["fired"]:
                     lines.append(f"    {d['label']}: no (" + "; ".join(d["blocks"]) + ")")
+                    log_decision(conn, ticker, symbol, snap, "SELL", d, fired=False, executed=False,
+                                 amount=None, blocks=d["blocks"], bull_market=bull_market)
                     continue
 
                 sell_frac_of_original = remaining_fraction * d["sell_fraction"]
@@ -394,7 +413,9 @@ def main() -> None:
                 amount = qty * position["currentPrice"]
                 lines.append(f"    {d['label']}: SELL {d['sell_fraction']*100:.0f}% of remaining "
                              f"(EUR{amount:.2f}, dry run)")
-                log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market)
+                trade_id = log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market)
+                log_decision(conn, ticker, symbol, snap, "SELL", d, fired=True, executed=True,
+                             amount=amount, blocks=[], bull_market=bull_market, trade_id=trade_id)
                 would_sell_total += amount
                 remaining_fraction *= (1 - d["sell_fraction"])
 
@@ -417,14 +438,13 @@ def main() -> None:
 
             pstate = trade_db.get_position_state(conn, ticker)  # refresh after any updates
 
-        # --- Buy rules ---
+        # --- Buy rules: always evaluated (so every rule that "took part" is
+        # recorded), execution is gated separately so a blocked rule still
+        # shows up as fired=1/executed=0 with the reason it didn't go through ---
         if position_closed_today:
-            lines.append("    (buy rules skipped - position closed by an exit rule above today)")
-            continue
-
+            lines.append("    (buy rules evaluated below, but position was closed by an exit rule above today)")
         if portfolio_blocks:
-            lines.append("    (buy rules skipped - portfolio-level block above)")
-            continue
+            lines.append("    (buy rules evaluated below, but blocked by the portfolio-level gate above)")
 
         remaining_stock_cap = MAX_STOCK_BUY_PER_DAY - trade_db.daily_stock_buy_total(conn, ticker, today)
         buy_decisions = {d["rule"]: d for d in evaluate_buy(ticker, position, snap, bull_market, pstate, conn, today)}
@@ -433,16 +453,35 @@ def main() -> None:
             d = buy_decisions[rule_key]
             if not d["fired"]:
                 lines.append(f"    {d['label']}: no (" + "; ".join(d["blocks"]) + ")")
+                log_decision(conn, ticker, symbol, snap, "BUY", d, fired=False, executed=False,
+                             amount=None, blocks=d["blocks"], bull_market=bull_market)
+                continue
+
+            gate_blocks = []
+            if position_closed_today:
+                gate_blocks.append("position closed by an exit rule earlier this run")
+            if portfolio_blocks:
+                gate_blocks.extend(portfolio_blocks)
+            if gate_blocks:
+                lines.append(f"    {d['label']}: WOULD fire, but blocked - " + "; ".join(gate_blocks))
+                log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
+                             amount=None, blocks=gate_blocks, bull_market=bull_market)
                 continue
 
             amount = min(d["base_amount"] * buy_multiplier, remaining_stock_cap, remaining_portfolio_cap)
             if amount <= 0:
+                budget_blocks = [f"no budget left (stock cap left EUR{remaining_stock_cap:.2f}, "
+                                  f"portfolio cap left EUR{remaining_portfolio_cap:.2f})"]
                 lines.append(f"    {d['label']}: WOULD fire, but no budget left "
                              f"(stock cap left EUR{remaining_stock_cap:.2f}, portfolio cap left EUR{remaining_portfolio_cap:.2f})")
+                log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
+                             amount=None, blocks=budget_blocks, bull_market=bull_market)
                 continue
 
             lines.append(f"    {d['label']}: BUY EUR{amount:.2f} (dry run)")
-            log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market)
+            trade_id = log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market)
+            log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=True,
+                         amount=amount, blocks=[], bull_market=bull_market, trade_id=trade_id)
             remaining_stock_cap -= amount
             remaining_portfolio_cap -= amount
             would_buy_total += amount

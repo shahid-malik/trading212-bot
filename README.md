@@ -68,7 +68,7 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 | `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
 | `config.py` / `rules_config.json` | Editable strategy parameters (position caps, drawdown thresholds, buy/exit rule amounts and percentages). `trading_bot.py` reads this at import time; the web UI writes to it. |
 | `webapp.py` + `templates/` | Local web UI (Flask, `127.0.0.1` only) to edit rule values and browse the trade log with full indicator context. See below. |
-| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: trade log with full indicator snapshot, an `equity_snapshots` table for peak/drawdown tracking, and `position_state` for exit-rule bookkeeping (bull profit lock, trailing stop, emergency-stop cooldown). |
+| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: `trades` (logged buy/sell with full indicator snapshot), `decisions` (every rule evaluated, fired or not), `equity_snapshots` (peak/drawdown tracking), and `position_state` (exit-rule bookkeeping: bull profit lock, trailing stop, emergency-stop cooldown). |
 | `log_trade.py` | CLI to manually log a real trade you placed yourself in the T212 app, auto-filling indicators + P&L. |
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
 | `TRADING_RULES.md` | The authoritative strategy spec. |
@@ -106,11 +106,20 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 open http://127.0.0.1:5050
 ```
 
-Local only (binds to `127.0.0.1`, not exposed to your network). Two pages:
+Local only (binds to `127.0.0.1`, not exposed to your network). Four pages:
 
-- **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of everything
-  in `trades.db`; click a row for the full indicator snapshot (SMA/EMA/RSI/MACD/
-  ATR/volume/SPY regime) that was true at that moment.
+- **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
+  that actually got logged; click a row for the full indicator snapshot (SMA/EMA/
+  RSI/MACD/ATR/volume/SPY regime) that was true at that moment.
+- **Decisions** — every rule the bot evaluated, every run, fired or not — not
+  just the ones that resulted in a trade. Shows whether a rule *fired* (its own
+  conditions were true) and whether it *executed* (a fired rule can still be
+  blocked by drawdown, daily loss, exposure cap, or no budget left), with the
+  specific block reasons. This is the full audit trail; Trades is just the
+  subset that went through.
+- **Watchlist** — add or remove tickers without hand-editing `watchlist.csv`.
+  Both the Trading212 ticker and Yahoo Finance symbol are required fields, so an
+  entry can't end up unscreenable the way a couple of hand-typed rows did before.
 - **Rules** — every tunable from `TRADING_RULES.md` (position caps, drawdown
   thresholds, buy amounts, exit thresholds) as an editable form, grouped to match
   the spec's sections. Saves to `rules_config.json`; `trading_bot.py` picks up

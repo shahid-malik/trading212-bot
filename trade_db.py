@@ -63,6 +63,34 @@ CREATE TABLE IF NOT EXISTS position_state (
     close_reason TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    yahoo_symbol TEXT,
+    side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+    rule TEXT NOT NULL,
+    label TEXT NOT NULL,
+    fired INTEGER NOT NULL,
+    executed INTEGER NOT NULL,
+    amount_eur REAL,
+    blocks TEXT,
+    price REAL,
+    spy_regime TEXT,
+    sma20 REAL,
+    ema20 REAL,
+    sma50 REAL,
+    sma200 REAL,
+    rsi14 REAL,
+    macd REAL,
+    macd_signal REAL,
+    macd_histogram REAL,
+    volume REAL,
+    avg_volume20 REAL,
+    atr14 REAL,
+    trade_id INTEGER
+);
 """
 
 
@@ -197,3 +225,34 @@ def reopen_position_state(conn: sqlite3.Connection, ticker: str, avg_price: floa
     profit lock and trailing stop reset per TRADING_RULES.md resolved definitions."""
     set_position_state(conn, ticker, simulated_open=1, close_reason=None, last_known_avg_price=avg_price,
                         bull_profit_lock=0, trailing_stop_active=0, trailing_stop_highest_price=None)
+
+
+def record_decision(conn: sqlite3.Connection, **fields) -> int:
+    """Every rule evaluation, fired or not - this is what powers the Decisions
+    page in webapp.py. `trades` stays limited to rules that actually executed;
+    this table is the full audit trail of every rule that took part."""
+    columns = ", ".join(fields.keys())
+    placeholders = ", ".join("?" for _ in fields)
+    cur = conn.execute(f"INSERT INTO decisions ({columns}) VALUES ({placeholders})", list(fields.values()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def recent_decisions(conn: sqlite3.Connection, ticker: str = "", side: str = "",
+                      fired_only: bool = False, executed_only: bool = False, limit: int = 1000) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    query = "SELECT * FROM decisions WHERE 1=1"
+    params: list = []
+    if ticker:
+        query += " AND ticker = ?"
+        params.append(ticker)
+    if side in ("BUY", "SELL"):
+        query += " AND side = ?"
+        params.append(side)
+    if fired_only:
+        query += " AND fired = 1"
+    if executed_only:
+        query += " AND executed = 1"
+    query += " ORDER BY timestamp DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return conn.execute(query, params).fetchall()

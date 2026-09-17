@@ -19,6 +19,12 @@
   .badge-buy { background: #dff5e1; color: #1a7431; }
   .badge-sell { background: #fde3e3; color: #a91c1c; }
   .badge-dry { background: #e9edf5; color: #445; }
+  .badge-fired { background: #dff5e1; color: #1a7431; }
+  .badge-blocked { background: #f0f0f0; color: #888; }
+  .badge-executed { background: #d8e8fd; color: #1a4d8f; }
+  .badge-notexec { background: #fff3cd; color: #8a6100; }
+  input[type=checkbox] { margin-right: 4px; }
+  .checkbox-field { display: flex; align-items: center; font-size: 13px; padding-bottom: 7px; }
   .filters { display: flex; gap: 10px; margin-bottom: 16px; align-items: end; flex-wrap: wrap; }
   .filters label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
   select, input[type=number], input[type=text] { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
@@ -44,6 +50,8 @@
   <h1>Trading212 Bot</h1>
   <nav>
     <a href="{{ url_for('trades') }}" class="{% if request.endpoint in ['trades','trade_detail'] %}active{% endif %}">Trades</a>
+    <a href="{{ url_for('decisions') }}" class="{% if request.endpoint == 'decisions' %}active{% endif %}">Decisions</a>
+    <a href="{{ url_for('watchlist') }}" class="{% if request.endpoint == 'watchlist' %}active{% endif %}">Watchlist</a>
     <a href="{{ url_for('rules') }}" class="{% if request.endpoint == 'rules' %}active{% endif %}">Rules</a>
   </nav>
 </header>

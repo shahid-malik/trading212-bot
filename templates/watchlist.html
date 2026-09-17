@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Watchlist - Trading212 Bot{% endblock %}
+{% block content %}
+
+<p class="muted">
+  Only tickers listed here are ever screened or traded by the bot. Both fields
+  are required so every entry can actually be evaluated - a name typed here
+  without a Yahoo symbol previously caused entries to be silently skipped.
+</p>
+
+{% if error %}<div class="flash-err">{{ error }}</div>{% endif %}
+{% if added %}<div class="flash-ok">Added {{ added }}.</div>{% endif %}
+{% if removed %}<div class="flash-ok">Removed {{ removed }}.</div>{% endif %}
+
+<div class="card">
+  <h2>Add a stock</h2>
+  <form method="post" action="{{ url_for('watchlist_add') }}">
+    <div class="field-row">
+      <label for="t212_ticker">Trading212 ticker (e.g. AAPL_US_EQ)</label>
+      <input type="text" id="t212_ticker" name="t212_ticker" required style="width:220px;text-align:left;">
+    </div>
+    <div class="field-row">
+      <label for="yahoo_symbol">Yahoo Finance symbol (e.g. AAPL)</label>
+      <input type="text" id="yahoo_symbol" name="yahoo_symbol" required style="width:220px;text-align:left;">
+    </div>
+    <div class="field-row">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" style="width:220px;text-align:left;">
+    </div>
+    <div class="field-row">
+      <label for="notes">Notes (optional)</label>
+      <input type="text" id="notes" name="notes" style="width:220px;text-align:left;">
+    </div>
+    <div style="margin-top:12px;"><button type="submit">Add to watchlist</button></div>
+  </form>
+</div>
+
+<div class="scroll-x">
+<table>
+  <thead>
+    <tr><th>T212 ticker</th><th>Yahoo symbol</th><th>Name</th><th>Notes</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r['t212_ticker'] }}</td>
+      <td>{{ r['yahoo_symbol'] }}</td>
+      <td>{{ r['name'] }}</td>
+      <td class="muted">{{ r['notes'] }}</td>
+      <td>
+        <form method="post" action="{{ url_for('watchlist_remove') }}" onsubmit="return confirm('Remove {{ r['t212_ticker'] }} from the watchlist?');">
+          <input type="hidden" name="t212_ticker" value="{{ r['t212_ticker'] }}">
+          <button type="submit" style="background:#a91c1c;">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">Watchlist is empty.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
