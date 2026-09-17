@@ -748,15 +748,15 @@ a score >= 85 setup occurs.
 33. CASH MANAGEMENT
 ==================================================
 
-Maximum invested capital = 70%.
+Maximum invested capital = 80%.
 
-Minimum cash = 30%.
+Minimum cash = 20%.
 
-If available cash < 30%:
+If available cash < 20%:
 
 NO NEW BUY.
 
-If portfolio reaches 70% invested:
+If portfolio reaches 80% invested:
 
 NO NEW BUY until exposure falls.
 

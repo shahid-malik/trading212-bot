@@ -2,12 +2,53 @@
 
 Source of truth for the automated strategy. Any bot/screener logic in this project
 should implement exactly this, not a reinterpretation of it. If a rule changes, edit
-it here first.
+it here first — including if you change a numeric threshold via the web UI's Rules
+page (`webapp.py`), which edits `rules_config.json`. Keep this document and that
+file in agreement; this document explains *why* a value is what it is, the config
+file is just the value.
 
-Status: **buy-only, dry-run bot exists** (`trading_bot.py`). It evaluates these
-rules and logs what it *would* buy, but places no real orders and never sells.
-Exit rules below are not implemented in code yet — pending explicit instruction
-to build them.
+Status: **full buy + sell dry-run bot exists** (`trading_bot.py`). It evaluates
+every rule below — market filter, all 3 buy rules, all 4 exit rules, the 80/20
+exposure cap, drawdown/daily-loss gates — and logs what it *would* do. It places
+no real orders of either kind; nothing in this repo calls Trading212's
+order-placement endpoint.
+
+### Dry-run sell simulation — how state survives across runs
+
+Because a dry-run "sell" never touches your real Trading212 position, the real
+P&L that triggered an exit rule (e.g. a 7%+ loss) is still there on the next
+run. Without extra bookkeeping the bot would re-fire the same exit forever. To
+avoid that, `trade_db.position_state` tracks, per ticker:
+
+- `simulated_open` — whether the bot considers this position open *in the
+  simulation*. A full-close exit rule (Emergency Stop, Trailing Stop) sets this
+  to 0 and records the real average price at that moment.
+- On a later run, if `simulated_open` is 0, the bot compares today's real
+  average price to the one it recorded at closing time. Unchanged → still the
+  same simulated-closed instance, skip re-evaluating. Changed (or the position
+  reappeared after being gone) → you actually traded this ticker for real,
+  treat it as a fresh instance and resume normal evaluation.
+- `bull_profit_lock` and `trailing_stop_active` reset whenever a position is
+  marked closed (simulated or real), matching the resolved definition that
+  these apply per position instance.
+
+This is bookkeeping for the *simulation's own consistency*, not a claim that it
+tracks a parallel paper portfolio precisely — partial-sell amounts in the report
+are computed off your real, unaffected position size each run.
+
+### Full condition-level logging
+
+Every individual named condition across every gate and rule is evaluated and
+logged every run, whether it passed or not - not just the ones that failed.
+Each condition has a unique, fully-qualified name (e.g. `Rule 1 - Price >
+EMA20` vs `Rule 3 - Price > EMA20` are logged separately even though they
+check the same thing, because each rule's own condition set is independent).
+This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3 (5+4+5, including the
+2 unenforced Rule 1 conditions), the Confidence check, Market Regime (2),
+Portfolio Risk Gates (3), and all 4 Exit Rules (1+2+3+4) - around 30 named
+checks per ticker per run. All runs from one execution of `trading_bot.py`
+share a `run_id`, so the web UI's Trades page can show the complete breakdown
+behind any single trade, not just the rule that fired.
 
 ## Capital
 
@@ -40,63 +81,57 @@ If Bull market = FALSE:
 - Do not open new positions.
 - Existing positions may be held; exit/risk rules stay active.
 
-## Buy Rules
+## Buy Rules — Confidence Scoring Model
 
-A position may only be opened/added to when Bull market = TRUE and all
-[Buy Protection](#buy-protection) checks pass, in addition to each rule's own
-conditions.
+**Supersedes independent rule firing (2026-09-18).** Buy Rules 1/2/3 no longer
+each independently trigger their own buy at their own fixed amount. Instead:
 
-### Buy Rule 1 — Trend
+1. Eligibility gates must ALL pass first (see [Buy Protection](#buy-protection)
+   below) — bull market, position size, not-losing, buy cooldown, emergency-stop
+   cooldown. If any gate fails, nothing buys regardless of score.
+2. Each rule's own technical conditions (below) are evaluated as components: the
+   fraction of that rule's conditions which are true, times that rule's weight.
+3. `confidence % = (rule1_fraction_true × rule1_weight + rule2_fraction_true × rule2_weight + rule3_fraction_true × rule3_weight) / (rule1_weight + rule2_weight + rule3_weight) × 100`
+4. A buy executes only when `confidence % >= confidence_threshold_pct` (default
+   **90%**), at a single configurable amount (`confidence_buy_amount`, default
+   **€20**) — not the old per-rule €10/€10/€20 amounts.
 
-```
-Price > EMA20
-AND Price > SMA50
-AND SMA50 > SMA200
-AND Bull market = TRUE
-AND position < €100
-AND stock is not losing
-AND no earnings within 3 trading days
-AND spread <= 0.5%
-```
-→ BUY €10. Cooldown = 3 trading days (per stock, this rule).
+Default weights (editable in the web UI's Rules page / `rules_config.json`):
+Rule 1 = 40%, Rule 3 = 35%, Rule 2 = 25% — matching the original precedence
+(Rule 1 > Rule 3 > Rule 2).
 
-### Buy Rule 2 — RSI
+Every trade still records which of Rule 1/2/3's own condition sets were fully
+true (`rule1_fired`/`rule2_fired`/`rule3_fired`) and the computed confidence %,
+visible in the web UI's Trades and Decisions pages — so you can see exactly
+which signals contributed to a buy, even though they no longer fire alone.
 
-```
-RSI14 >= 55 AND RSI14 <= 65
-AND Price > EMA20
-AND Price > SMA50
-AND SMA50 > SMA200
-AND Bull market = TRUE
-AND position < €100
-AND stock is not losing
-AND RSI buy cooldown expired
-```
-→ BUY €10.
+### Buy Rule 1 — Trend (weight: `rule1_weight_pct`, default 40%)
 
-### Buy Rule 3 — MACD
+Conditions: `Price > EMA20`, `Price > SMA50`, `SMA50 > SMA200`.
 
-```
-MACD > Signal
-AND MACD Histogram > 0
-AND Price > EMA20
-AND Price > SMA50
-AND SMA50 > SMA200
-AND Bull market = TRUE
-AND position < €100
-AND stock is not losing
-AND MACD cooldown expired
-```
-→ BUY €20.
+### Buy Rule 2 — RSI (weight: `rule2_weight_pct`, default 25%)
 
-## Buy Protection (hard caps, checked before any buy rule executes)
+Conditions: `RSI14 >= 55 AND RSI14 <= 65`, `Price > EMA20`, `Price > SMA50`,
+`SMA50 > SMA200`.
 
-- Never execute more than €20 total purchases in one stock on the same day.
-- Never execute more than €50 total purchases across the entire portfolio on the same day.
+### Buy Rule 3 — MACD (weight: `rule3_weight_pct`, default 35%)
+
+Conditions: `MACD > Signal`, `MACD Histogram > 0`, `Price > EMA20`,
+`Price > SMA50`, `SMA50 > SMA200`.
+
+Not enforced in any rule (no free data source, see Known Implementation Gaps):
+`no earnings within 3 trading days`, `spread <= 0.5%`.
+
+## Buy Protection (hard caps, checked before the confidence buy executes)
+
+- Never execute more than €20 total purchases in one stock on the same day
+  (`max_stock_buy_per_day`).
+- Never execute more than €50 total purchases across the entire portfolio on
+  the same day (`max_portfolio_buy_per_day`).
 - Never buy a position that is currently losing.
 - Never buy if portfolio daily loss >= 1.5%.
 - Never buy if portfolio drawdown >= 8%.
-- Never buy if earnings are within 3 trading days.
+- Never buy if earnings are within 3 trading days (not enforced, see above).
 
 ## Exit Rules
 
@@ -153,19 +188,19 @@ with them (the risk-limits table has already been updated for #5).
 
 ### Buy cooldown
 
-- 3 trading days between discretionary buys of the same stock, shared across all
-  three buy rules (not a separate cooldown per rule).
-- Risk-management sells are never restricted by buy cooldown (moot right now since
-  no sell logic is implemented).
+- 3 trading days between discretionary buys of the same stock — one shared
+  cooldown for the confidence-based buy decision (not per old-rule).
+- Risk-management sells are never restricted by buy cooldown - the 4 exit rules
+  evaluate and fire independently of this.
 
 ### Daily stock buy cap vs. rule stacking
 
-- The €20/stock/day cap always wins — signals never stack past it.
-- Precedence when multiple rules fire the same day on the same stock:
-  **Rule 1 (strongest confirmed setup) > Rule 3 (MACD/RSI confirmation) > Rule 2
-  (basic trend entry)**.
-- `daily_stock_buy_amount = min(signal_amount, €20 - stock_buys_today)`. If Rule 1
-  consumes the full €20, Rules 2/3 place €0 that day.
+**Superseded by the Confidence Scoring Model above (2026-09-18).** Rules no
+longer fire independently, so there's nothing to stack — there's exactly one
+buy decision per ticker per run (the confidence score), capped by
+`min(confidence_buy_amount, €20 - stock_buys_today, €50 - portfolio_buys_today)`.
+The original precedence (Rule 1 > Rule 3 > Rule 2) lives on as the default
+confidence weight ordering (40% > 35% > 25%).
 
 ### "Stock is not losing"
 

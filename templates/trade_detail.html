@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Trade #{{ row['id'] }} - Trading212 Bot{% endblock %}
+{% block content %}
+<p><a class="rowlink" href="{{ url_for('trades') }}">&larr; back to trades</a></p>
+
+<div class="card">
+  <h2>{{ row['ticker'] }} - {{ row['action'] }} <span class="badge {% if row['dry_run'] %}badge-dry{% elif row['action']=='BUY' %}badge-buy{% else %}badge-sell{% endif %}">{% if row['dry_run'] %}dry run{% else %}real{% endif %}</span></h2>
+  <div class="kv">
+    <div>Timestamp</div><div>{{ row['timestamp'] }}</div>
+    <div>Yahoo symbol</div><div>{{ row['yahoo_symbol'] }}</div>
+    <div>Order size (EUR)</div><div>{{ "%.2f"|format(row['order_size_eur']) if row['order_size_eur'] is not none else '-' }}</div>
+    <div>Quantity</div><div>{{ row['quantity'] }}</div>
+    <div>Price</div><div>{{ row['price'] }}</div>
+    <div>Average price</div><div>{{ row['avg_price'] }}</div>
+    <div>Current price</div><div>{{ row['current_price'] }}</div>
+    <div>P/L %</div><div>{{ row['profit_loss_pct'] }}</div>
+    <div>P/L EUR</div><div>{{ row['profit_loss_eur'] }}</div>
+    <div>Reason</div><div>{{ row['reason'] }}</div>
+    <div>Order result</div><div>{{ row['order_result'] }}</div>
+    {% if row['action'] == 'BUY' %}
+    <div>Rule 1 (Trend) fired</div><div>{{ 'yes' if row['rule1_fired'] else 'no' if row['rule1_fired'] is not none else '-' }}</div>
+    <div>Rule 2 (RSI) fired</div><div>{{ 'yes' if row['rule2_fired'] else 'no' if row['rule2_fired'] is not none else '-' }}</div>
+    <div>Rule 3 (MACD) fired</div><div>{{ 'yes' if row['rule3_fired'] else 'no' if row['rule3_fired'] is not none else '-' }}</div>
+    <div>Confidence</div><div>{{ "%.1f%%"|format(row['confidence_pct']) if row['confidence_pct'] is not none else '-' }}</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Indicator snapshot at time of trade</h2>
+  <div class="kv">
+    <div>SPY regime</div><div>{{ row['spy_regime'] }}</div>
+    <div>SMA20</div><div>{{ row['sma20'] }}</div>
+    <div>EMA20</div><div>{{ row['ema20'] }}</div>
+    <div>SMA50</div><div>{{ row['sma50'] }}</div>
+    <div>SMA200</div><div>{{ row['sma200'] }}</div>
+    <div>RSI14</div><div>{{ row['rsi14'] }}</div>
+    <div>MACD</div><div>{{ row['macd'] }}</div>
+    <div>MACD signal</div><div>{{ row['macd_signal'] }}</div>
+    <div>MACD histogram</div><div>{{ row['macd_histogram'] }}</div>
+    <div>Volume</div><div>{{ row['volume'] }}</div>
+    <div>Avg volume (20d)</div><div>{{ row['avg_volume20'] }}</div>
+    <div>ATR14</div><div>{{ row['atr14'] }}</div>
+    <div>Spread %</div><div>{{ row['spread_pct'] if row['spread_pct'] is not none else 'not enforced (no data source)' }}</div>
+  </div>
+</div>
+{% endblock %}

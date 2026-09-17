@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Trades - Trading212 Bot{% endblock %}
+{% block content %}
+
+<form class="filters" method="get">
+  <div>
+    <label for="ticker">Ticker</label>
+    <select name="ticker" id="ticker">
+      <option value="">All</option>
+      {% for t in tickers %}
+      <option value="{{ t }}" {% if t == ticker %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="action">Action</label>
+    <select name="action" id="action">
+      <option value="">All</option>
+      <option value="BUY" {% if action == "BUY" %}selected{% endif %}>BUY</option>
+      <option value="SELL" {% if action == "SELL" %}selected{% endif %}>SELL</option>
+    </select>
+  </div>
+  <div>
+    <label for="run_type">Run type</label>
+    <select name="run_type" id="run_type">
+      <option value="">All</option>
+      <option value="dry" {% if run_type == "dry" %}selected{% endif %}>Dry run</option>
+      <option value="real" {% if run_type == "real" %}selected{% endif %}>Real</option>
+    </select>
+  </div>
+  <div><button type="submit">Filter</button></div>
+</form>
+
+<p class="muted">{{ rows|length }} trade(s) shown (most recent 500). Click a timestamp for the
+indicator snapshot; open "All rules" on a row for every gate/rule evaluated that
+run, not just the one that produced this trade.</p>
+
+<div class="scroll-x">
+<table>
+  <thead>
+    <tr>
+      <th>Timestamp</th><th>Ticker</th><th>Action</th><th>Type</th>
+      <th>Order EUR</th><th>Price</th><th>Avg price</th><th>P/L %</th><th>Reason</th>
+      <th>Rule 1</th><th>Rule 2</th><th>Rule 3</th><th>Confidence</th><th>All rules</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['id']) }}">{{ r['timestamp'] }}</a></td>
+      <td>{{ r['ticker'] }}</td>
+      <td><span class="badge {% if r['action'] == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ r['action'] }}</span></td>
+      <td>{% if r['dry_run'] %}<span class="badge badge-dry">dry</span>{% else %}real{% endif %}</td>
+      <td>{{ "%.2f"|format(r['order_size_eur']) if r['order_size_eur'] is not none else "" }}</td>
+      <td>{{ "%.2f"|format(r['price']) if r['price'] is not none else "" }}</td>
+      <td>{{ "%.2f"|format(r['avg_price']) if r['avg_price'] is not none else "" }}</td>
+      <td>{{ "%.1f"|format(r['profit_loss_pct']) if r['profit_loss_pct'] is not none else "" }}</td>
+      <td>{{ r['reason'] }}</td>
+      <td>{% if r['rule1_fired'] is not none %}<span class="badge {% if r['rule1_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule1_fired'] else 'no' }}</span>{% endif %}</td>
+      <td>{% if r['rule2_fired'] is not none %}<span class="badge {% if r['rule2_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule2_fired'] else 'no' }}</span>{% endif %}</td>
+      <td>{% if r['rule3_fired'] is not none %}<span class="badge {% if r['rule3_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule3_fired'] else 'no' }}</span>{% endif %}</td>
+      <td>{{ "%.1f%%"|format(r['confidence_pct']) if r['confidence_pct'] is not none else "" }}</td>
+      <td>
+        {% set rules = all_rules.get(r['id'], []) %}
+        {% if rules %}
+        <details>
+          <summary>{{ rules|length }} rule groups</summary>
+          <div class="rules-breakdown">
+            {% for grp in rules %}
+            <div class="rule-group">
+              <strong class="{% if grp.fired %}ok-text{% else %}bad-text{% endif %}">
+                {{ grp.label }} — {{ 'PASSED' if grp.fired else 'blocked' }}
+              </strong>
+              <ul>
+                {% for c in grp.conditions %}
+                <li class="{% if c.passed %}ok-text{% else %}bad-text{% endif %}">
+                  {{ '✓' if c.passed else '✗' }} {{ c.name }}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endfor %}
+          </div>
+        </details>
+        {% else %}
+        <span class="muted">-</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="14" class="muted">No trades logged yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

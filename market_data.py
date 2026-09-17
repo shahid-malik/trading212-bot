@@ -142,6 +142,7 @@ def indicator_snapshot(symbol: str) -> dict:
         "volume": volumes[-1],
         "avg_volume20": sma(volumes, 20),
         "atr14": atr(highs, lows, closes, 14),
+        "prev_20d_high": max(highs[-21:-1]) if len(highs) >= 21 else None,
     }
 
 

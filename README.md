@@ -1,11 +1,36 @@
 # Defensive Trading Bot for Trading 212
 
+**v1.0** — 2026-09-18
+
 An algorithmic trading toolkit for Trading 212 focused on **defensive, rule-based
 trend and momentum trading**. It combines market-regime analysis, technical
-indicators, position sizing, portfolio risk management, and (currently) a
-buy-only dry-run bot — plus the plumbing to pull your live portfolio, screen a
+indicators, position sizing, portfolio risk management, and a full buy+sell
+dry-run bot — plus the plumbing to pull your live portfolio, screen a
 watchlist, and log every (simulated) trade with full indicator context for later
 analysis.
+
+## Release notes
+
+### v1.0 (2026-09-18)
+
+- Portfolio pull + technical screener over a watchlist.
+- Full buy + sell dry-run rule engine: buy decisions via a weighted confidence
+  score (Rule 1 Trend 40% / Rule 3 MACD 35% / Rule 2 RSI 25%, executes above a
+  90% threshold), all 4 exit rules firing independently and immediately.
+- Position/day, portfolio/day, and 80%/20% exposure caps; drawdown-based buy
+  throttling.
+- Full audit trail: ~30 individually-named conditions logged per ticker per
+  run, whether they passed or not, correlated by a shared run ID.
+- Local web UI (Trades, Decisions, Watchlist, Rules pages), `127.0.0.1` only.
+- Daily `launchd` automation for the screener and bot.
+- **No live order placement anywhere in the codebase** — this release is
+  dry-run only, by design.
+
+Known limitations: earnings-date and bid/ask-spread filters aren't enforced
+(no free data source, flagged explicitly every run); trading-day cooldowns
+approximate calendar weekdays; daily-loss check compares once-daily snapshots,
+not true intraday monitoring. See `TRADING_RULES.md` > Known Implementation
+Gaps for details.
 
 ## Current status
 
@@ -13,9 +38,9 @@ analysis.
 |---|---|
 | Pull live portfolio/cash from Trading212 | ✅ working (`t212_portfolio.py`) |
 | Technical screener over a watchlist | ✅ working (`screener.py`) |
-| Buy-only rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
-| Sell / exit rules | ❌ not implemented — intentionally, per explicit instruction not to automate any selling |
-| Live order execution | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
+| Buy rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
+| Sell / exit rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
+| Live order execution (buy or sell) | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
 | Trade logging with full indicator snapshot | ✅ working (`trade_db.py`, SQLite) |
 | Backtesting | ❌ not built yet |
 
@@ -35,28 +60,28 @@ Quick summary of what's actually implemented today:
 
 - **Market filter**: only buys when SPY > SMA200 AND SPY's SMA50 > SMA200 (bull
   regime). No exceptions.
-- **Buy Rule 1 — Trend** (€10): price > EMA20/SMA50, SMA50 > SMA200.
-- **Buy Rule 2 — RSI** (€10): RSI14 between 55–65, same trend conditions.
-- **Buy Rule 3 — MACD** (€20): MACD > signal and histogram > 0, same trend
-  conditions.
-- **Buy protection**: max €20/stock/day, max €50/portfolio/day, never adds to a
-  losing position, 3-trading-day cooldown per stock, blocks all buying at ≥8%
-  drawdown, cuts buy size 60% at ≥5% drawdown.
-- **Rule precedence** when multiple rules fire the same stock/day: Rule 1 > Rule
-  3 > Rule 2, capped at €20/stock/day total (they don't stack).
+- **Buy decision = weighted confidence score**, not independent rule firing:
+  Rule 1 (Trend, weight 40%), Rule 3 (MACD, weight 35%), Rule 2 (RSI, weight
+  25%) each contribute the fraction of their own conditions that are true; a
+  buy only executes once the combined score clears 90% (both configurable).
+  When it does, it buys a single configurable amount (default €20) — not the
+  old per-rule €10/€10/€20. Each rule's individual fired/not-fired status and
+  the computed confidence % are still recorded on every trade.
+- **Buy protection**: max €20/stock/day, max €50/portfolio/day, max 80%
+  portfolio invested / min 20% cash, never adds to a losing position,
+  3-trading-day cooldown per stock, blocks all buying at ≥8% drawdown, cuts buy
+  size 60% at ≥5% drawdown.
+- **Exit rules** (dry-run only, see below): Emergency Stop (-7% → sell 100%, 10
+  trading-day re-entry cooldown), Bull Market Profit (+3% → sell 50%, once per
+  position instance), Breakout Profit (+10% + new 20d high + volume → sell 25%,
+  arms the trailing stop), Trailing Stop (highest price since arming − 2×ATR14).
 - **Known gaps**: no free data source for earnings-date or live bid/ask spread,
   so those two Buy Rule 1 conditions aren't enforced yet — flagged explicitly in
   the bot's own output every run, not silently skipped.
 
-### ⚠️ Open discrepancy — not yet resolved
-
-This repo's original scaffolding (`algo.csv`, `parameters.csv`, and this
-README's earlier draft) specifies **70% max exposure / 30% min cash**. The rules
-given explicitly for `TRADING_RULES.md` specify **80% max exposure / 20% min
-cash**. `trading_bot.py` currently does not enforce either figure directly (it
-gates on per-stock/per-day euro caps and portfolio drawdown, not an aggregate
-exposure %) — but this needs a decision before that check gets added. Pick one
-source of truth and this note goes away.
+Max exposure / min cash is settled: **80% max invested / 20% min cash**,
+consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
+`TRADING_RULES.md`, and enforced in `trading_bot.py`).
 
 ## Project layout
 
@@ -66,18 +91,21 @@ source of truth and this note goes away.
 | `market_data.py` | Free, no-key market data + indicators (SMA/EMA/RSI/MACD/ATR) via Yahoo Finance's public chart endpoint. |
 | `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. |
 | `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic. Not a prediction — a filter. |
-| `trading_bot.py` | Buy-only dry-run engine implementing `TRADING_RULES.md`. No sell logic exists in the file; no order-placement call exists anywhere in the repo. |
-| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: trade log with full indicator snapshot, plus an `equity_snapshots` table for peak/drawdown tracking. |
+| `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
+| `config.py` / `rules_config.json` | Editable strategy parameters (position caps, drawdown thresholds, buy/exit rule amounts and percentages). `trading_bot.py` reads this at import time; the web UI writes to it. |
+| `webapp.py` + `templates/` | Local web UI (Flask, `127.0.0.1` only) to edit rule values and browse the trade log with full indicator context. See below. |
+| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: `trades` (logged buy/sell with full indicator snapshot), `decisions` (every rule evaluated, fired or not), `equity_snapshots` (peak/drawdown tracking), and `position_state` (exit-rule bookkeeping: bull profit lock, trailing stop, emergency-stop cooldown). |
 | `log_trade.py` | CLI to manually log a real trade you placed yourself in the T212 app, auto-filling indicators + P&L. |
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
 | `TRADING_RULES.md` | The authoritative strategy spec. |
-| `run_screener.sh` + `launchd` | Daily automation for the screener (see below). |
+| `run_screener.sh` / `run_bot.sh` + `launchd` | Daily automation for the screener and dry-run bot (see below). |
 | `gmail_draft.py` / `daily_alert.py` | Optional: create a Gmail draft with the daily screener report. Requires a one-time local OAuth setup (see `gmail_draft.py` docstring) — not yet configured. |
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
+.venv/bin/pip install flask                                          # for webapp.py
 .venv/bin/pip install google-auth-oauthlib google-api-python-client  # only needed for gmail_draft.py
 
 cp .env.example .env
@@ -92,16 +120,49 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 ```bash
 .venv/bin/python3 t212_portfolio.py                    # print portfolio summary
 .venv/bin/python3 screener.py                           # technical screener report
-.venv/bin/python3 trading_bot.py                        # dry-run buy-rule evaluation, logs to trades.db
+.venv/bin/python3 trading_bot.py                        # dry-run buy+sell evaluation, logs to trades.db
 .venv/bin/python3 log_trade.py --ticker MSFT_US_EQ --action BUY --price 495.17 --qty 0.02 --reason "Buy Rule 1 - Trend"
 .venv/bin/python3 export_trades.py trades_export.csv     # dump trade log to CSV
 ```
 
+## Web UI
+
+```bash
+.venv/bin/python3 webapp.py
+open http://127.0.0.1:5050
+```
+
+Local only (binds to `127.0.0.1`, not exposed to your network). Four pages:
+
+- **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
+  that actually got logged, including which of Rule 1/2/3 individually fired and
+  the computed confidence % for every BUY row. Each row also has an "All rules"
+  expander showing every named condition evaluated that run - buy eligibility
+  gates, all Rule 1/2/3 conditions, the confidence check, all 4 exit rules,
+  market regime, and portfolio risk gates (~30 individually-named checks) - not
+  just the one that produced this trade. Click a timestamp for the raw
+  indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime).
+- **Decisions** — every rule the bot evaluated, every run, fired or not — not
+  just the ones that resulted in a trade. Shows whether a rule *fired* (its own
+  conditions were true) and whether it *executed* (a fired rule can still be
+  blocked by drawdown, daily loss, exposure cap, or no budget left), with the
+  specific block reasons. This is the full audit trail; Trades is just the
+  subset that went through.
+- **Watchlist** — add or remove tickers without hand-editing `watchlist.csv`.
+  Both the Trading212 ticker and Yahoo Finance symbol are required fields, so an
+  entry can't end up unscreenable the way a couple of hand-typed rows did before.
+- **Rules** — every tunable from `TRADING_RULES.md` (position caps, drawdown
+  thresholds, buy amounts, exit thresholds) as an editable form, grouped to match
+  the spec's sections. Saves to `rules_config.json`; `trading_bot.py` picks up
+  changes on its next run.
+
 ## Automation
 
-`run_screener.sh` runs the screener daily via a macOS `launchd` job (weekday
-7am), writing to `reports/`. `trading_bot.py` is not yet wired into that
-schedule — it's currently a manual/on-demand dry run.
+`run_screener.sh` runs the screener daily via a macOS `launchd` job
+(`com.t212.screener`, weekday 7am), writing to `reports/`. `run_bot.sh` runs
+`trading_bot.py` the same way (`com.t212.bot`, weekday 7:05am), writing to
+`reports/bot_latest.txt`. Both are dry-run/read-only with respect to real
+trading, so both are safe to run unattended.
 
 Note: launchd-spawned processes are subject to macOS's TCC privacy protections
 for `~/Documents`. If a scheduled job fails with "Operation not permitted",
@@ -113,8 +174,11 @@ grant Full Disk Access to `/bin/bash` in System Settings → Privacy & Security.
   new, clearly-separated function that calls Trading212's order-placement
   endpoint — that hasn't been written, and won't be without an explicit,
   deliberate decision to do so.
-- **No sell logic exists at all**, automated or otherwise, per explicit
-  instruction. Exit rules are specced in `TRADING_RULES.md` but not implemented.
+- **All 4 exit rules are implemented and evaluated every run, but only ever in
+  dry run** — a "sell" is a logged decision, not a real order. See
+  `TRADING_RULES.md` > "Dry-run sell simulation" for how the bot avoids
+  re-firing the same exit forever when the real position never actually
+  changes.
 - Risk-management rules are meant to override trading signals, not the other
   way around. When a required check can't be verified (e.g. earnings date,
   spread), the bot says so in its output rather than assuming it passes.

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Decisions - Trading212 Bot{% endblock %}
+{% block content %}
+
+<p class="muted">
+  Every rule the bot evaluated, every run - not just the ones that resulted in a
+  logged trade. "Fired" means the rule's own conditions were true; "Executed"
+  means it actually went through (a fired rule can be blocked by a higher-level
+  gate: portfolio drawdown, daily loss, exposure cap, or no budget left).
+</p>
+
+<form class="filters" method="get">
+  <div>
+    <label for="ticker">Ticker</label>
+    <select name="ticker" id="ticker">
+      <option value="">All</option>
+      {% for t in tickers %}
+      <option value="{{ t }}" {% if t == ticker %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="side">Side</label>
+    <select name="side" id="side">
+      <option value="">All</option>
+      <option value="BUY" {% if side == "BUY" %}selected{% endif %}>BUY</option>
+      <option value="SELL" {% if side == "SELL" %}selected{% endif %}>SELL</option>
+    </select>
+  </div>
+  <div class="checkbox-field">
+    <input type="checkbox" name="fired_only" id="fired_only" value="1" {% if fired_only %}checked{% endif %}>
+    <label for="fired_only">Fired only</label>
+  </div>
+  <div class="checkbox-field">
+    <input type="checkbox" name="executed_only" id="executed_only" value="1" {% if executed_only %}checked{% endif %}>
+    <label for="executed_only">Executed only</label>
+  </div>
+  <div><button type="submit">Filter</button></div>
+</form>
+
+<p class="muted">{{ rows|length }} decision(s) shown (most recent 1000).</p>
+
+<div class="scroll-x">
+<table>
+  <thead>
+    <tr>
+      <th>Timestamp</th><th>Ticker</th><th>Side</th><th>Rule</th>
+      <th>Fired</th><th>Executed</th><th>Amount EUR</th><th>Blocked / reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r['timestamp'] }}</td>
+      <td>{% if r['trade_id'] %}<a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['trade_id']) }}">{{ r['ticker'] }}</a>{% else %}{{ r['ticker'] }}{% endif %}</td>
+      <td><span class="badge {% if r['side'] == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ r['side'] }}</span></td>
+      <td>{{ r['label'] }}</td>
+      <td><span class="badge {% if r['fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['fired'] else 'no' }}</span></td>
+      <td>{% if r['fired'] %}<span class="badge {% if r['executed'] %}badge-executed{% else %}badge-notexec{% endif %}">{{ 'yes' if r['executed'] else 'no' }}</span>{% else %}-{% endif %}</td>
+      <td>{{ "%.2f"|format(r['amount_eur']) if r['amount_eur'] is not none else "" }}</td>
+      <td class="muted">{{ r['blocks'] or "" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No decisions logged yet - run trading_bot.py.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
