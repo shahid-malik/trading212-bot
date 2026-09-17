@@ -41,7 +41,11 @@ CREATE TABLE IF NOT EXISTS trades (
     spread_pct REAL,
     reason TEXT,
     order_result TEXT,
-    dry_run INTEGER NOT NULL DEFAULT 0
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    rule1_fired INTEGER,
+    rule2_fired INTEGER,
+    rule3_fired INTEGER,
+    confidence_pct REAL
 );
 
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -96,6 +100,10 @@ CREATE TABLE IF NOT EXISTS decisions (
 
 _MIGRATIONS = [
     "ALTER TABLE trades ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN rule1_fired INTEGER",
+    "ALTER TABLE trades ADD COLUMN rule2_fired INTEGER",
+    "ALTER TABLE trades ADD COLUMN rule3_fired INTEGER",
+    "ALTER TABLE trades ADD COLUMN confidence_pct REAL",
     "ALTER TABLE position_state ADD COLUMN simulated_open INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE position_state ADD COLUMN last_known_avg_price REAL",
     "ALTER TABLE position_state ADD COLUMN close_reason TEXT",

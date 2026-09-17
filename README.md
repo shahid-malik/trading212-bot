@@ -35,16 +35,17 @@ Quick summary of what's actually implemented today:
 
 - **Market filter**: only buys when SPY > SMA200 AND SPY's SMA50 > SMA200 (bull
   regime). No exceptions.
-- **Buy Rule 1 — Trend** (€10): price > EMA20/SMA50, SMA50 > SMA200.
-- **Buy Rule 2 — RSI** (€10): RSI14 between 55–65, same trend conditions.
-- **Buy Rule 3 — MACD** (€20): MACD > signal and histogram > 0, same trend
-  conditions.
+- **Buy decision = weighted confidence score**, not independent rule firing:
+  Rule 1 (Trend, weight 40%), Rule 3 (MACD, weight 35%), Rule 2 (RSI, weight
+  25%) each contribute the fraction of their own conditions that are true; a
+  buy only executes once the combined score clears 90% (both configurable).
+  When it does, it buys a single configurable amount (default €20) — not the
+  old per-rule €10/€10/€20. Each rule's individual fired/not-fired status and
+  the computed confidence % are still recorded on every trade.
 - **Buy protection**: max €20/stock/day, max €50/portfolio/day, max 80%
   portfolio invested / min 20% cash, never adds to a losing position,
   3-trading-day cooldown per stock, blocks all buying at ≥8% drawdown, cuts buy
   size 60% at ≥5% drawdown.
-- **Rule precedence** when multiple rules fire the same stock/day: Rule 1 > Rule
-  3 > Rule 2, capped at €20/stock/day total (they don't stack).
 - **Exit rules** (dry-run only, see below): Emergency Stop (-7% → sell 100%, 10
   trading-day re-entry cooldown), Bull Market Profit (+3% → sell 50%, once per
   position instance), Breakout Profit (+10% + new 20d high + volume → sell 25%,
@@ -109,8 +110,10 @@ open http://127.0.0.1:5050
 Local only (binds to `127.0.0.1`, not exposed to your network). Four pages:
 
 - **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
-  that actually got logged; click a row for the full indicator snapshot (SMA/EMA/
-  RSI/MACD/ATR/volume/SPY regime) that was true at that moment.
+  that actually got logged, including which of Rule 1/2/3 individually fired and
+  the computed confidence % for every BUY row; click a row for the full
+  indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime) that was true at
+  that moment.
 - **Decisions** — every rule the bot evaluated, every run, fired or not — not
   just the ones that resulted in a trade. Shows whether a rule *fired* (its own
   conditions were true) and whether it *executed* (a fired rule can still be

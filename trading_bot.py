@@ -48,13 +48,17 @@ DRAWDOWN_REDUCE_FACTOR = CFG["drawdown_reduce_factor"]  # reduce buy amounts by 
 DRAWDOWN_STOP_PCT = CFG["drawdown_stop_pct"]
 BUY_COOLDOWN_TRADING_DAYS = int(CFG["buy_cooldown_trading_days"])
 
-RULE1_AMOUNT = CFG["rule1_amount"]
-RULE2_AMOUNT = CFG["rule2_amount"]
-RULE3_AMOUNT = CFG["rule3_amount"]
+# Confidence scoring supersedes independent Rule 1/2/3 firing (see TRADING_RULES.md
+# > Buy Rules - Confidence Scoring Model). Each rule's own conditions still get
+# evaluated (and shown per-trade), but only the combined weighted score decides
+# whether a buy executes.
+RULE1_WEIGHT_PCT = CFG["rule1_weight_pct"]
+RULE2_WEIGHT_PCT = CFG["rule2_weight_pct"]
+RULE3_WEIGHT_PCT = CFG["rule3_weight_pct"]
+CONFIDENCE_THRESHOLD_PCT = CFG["confidence_threshold_pct"]
+CONFIDENCE_BUY_AMOUNT = CFG["confidence_buy_amount"]
 RSI_BUY_MIN = CFG["rsi_buy_min"]
 RSI_BUY_MAX = CFG["rsi_buy_max"]
-# Precedence per TRADING_RULES.md Resolved Definitions: Rule 1 > Rule 3 > Rule 2
-RULE_PRECEDENCE = ["rule1", "rule3", "rule2"]
 
 EMERGENCY_STOP_LOSS_PCT = CFG["emergency_stop_loss_pct"]
 EMERGENCY_STOP_COOLDOWN_DAYS = int(CFG["emergency_stop_cooldown_days"])
@@ -171,10 +175,22 @@ def evaluate_exit(position: dict, snap: dict, pstate: dict, bull_market: bool) -
     return decisions
 
 
+def _rule_score(conditions: list[tuple[bool, str]]) -> tuple[bool, float, list[str]]:
+    """conditions: list of (is_true, description). Returns (all_true, fraction_true, failed_descriptions)."""
+    true_count = sum(1 for ok, _ in conditions if ok)
+    failed = [desc for ok, desc in conditions if not ok]
+    fraction = true_count / len(conditions) if conditions else 0.0
+    return (not failed), fraction, failed
+
+
 def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bool,
                   pstate: dict, conn, today: str) -> list[dict]:
+    """Returns [rule1_component, rule2_component, rule3_component, confidence_decision].
+    The three components are informational only (fired = that rule's own full
+    condition set was true) - see TRADING_RULES.md > Buy Rules - Confidence
+    Scoring Model for why they no longer trigger independent buys. Only the
+    'confidence' decision actually executes."""
     price = snap["price"]
-    decisions = []
 
     position_value = (position["quantity"] * position["currentPrice"]) if position else 0.0
     avg_price = position["averagePrice"] if position else None
@@ -189,47 +205,69 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
     if pstate["emergency_stop_until"]:
         emergency_cooldown_ok = today >= pstate["emergency_stop_until"]
 
-    shared_blocks = []
+    # Eligibility gates: portfolio/position state, not technical signal. All must
+    # pass or nothing buys regardless of confidence score (Buy Protection rules).
+    gate_blocks = []
     if not bull_market:
-        shared_blocks.append("bull market filter = FALSE")
+        gate_blocks.append("bull market filter = FALSE")
     if position_value >= MAX_POSITION_PER_STOCK:
-        shared_blocks.append(f"position already at/above max (EUR{position_value:.2f} >= EUR{MAX_POSITION_PER_STOCK:.0f})")
+        gate_blocks.append(f"position already at/above max (EUR{position_value:.2f} >= EUR{MAX_POSITION_PER_STOCK:.0f})")
     if not not_losing:
         pl_pct = (position["currentPrice"] / avg_price - 1) * 100
-        shared_blocks.append(f"position is losing ({pl_pct:+.1f}%)")
+        gate_blocks.append(f"position is losing ({pl_pct:+.1f}%)")
     if not cooldown_ok:
-        shared_blocks.append(f"buy cooldown active (last buy {last_buy_ts})")
+        gate_blocks.append(f"buy cooldown active (last buy {last_buy_ts})")
     if not emergency_cooldown_ok:
-        shared_blocks.append(f"emergency-stop re-entry cooldown until {pstate['emergency_stop_until']}")
-    trend_ok = snap["sma50"] is not None and snap["sma200"] is not None and snap["sma50"] > snap["sma200"]
-    if not trend_ok:
-        shared_blocks.append("SMA50 not above SMA200")
-    price_ok = snap["ema20"] is not None and price > snap["ema20"] and snap["sma50"] is not None and price > snap["sma50"]
-    if not price_ok:
-        shared_blocks.append("price not above EMA20/SMA50")
+        gate_blocks.append(f"emergency-stop re-entry cooldown until {pstate['emergency_stop_until']}")
 
-    # Rule 1 - Trend (spread/earnings filters not enforced - no data source, see TRADING_RULES.md)
-    rule1_fired = not shared_blocks
-    decisions.append({"rule": "rule1", "label": "Buy Rule 1 - Trend", "fired": rule1_fired,
-                       "base_amount": RULE1_AMOUNT, "blocks": list(shared_blocks) if not rule1_fired else []})
+    price_above_ema20 = snap["ema20"] is not None and price > snap["ema20"]
+    price_above_sma50 = snap["sma50"] is not None and price > snap["sma50"]
+    sma50_above_sma200 = snap["sma50"] is not None and snap["sma200"] is not None and snap["sma50"] > snap["sma200"]
+    rsi_in_range = snap["rsi14"] is not None and RSI_BUY_MIN <= snap["rsi14"] <= RSI_BUY_MAX
+    macd_above_signal = snap["macd"] is not None and snap["macd_signal"] is not None and snap["macd"] > snap["macd_signal"]
+    macd_hist_positive = snap["macd_histogram"] is not None and snap["macd_histogram"] > 0
 
-    rsi_blocks = list(shared_blocks)
-    if snap["rsi14"] is None or not (RSI_BUY_MIN <= snap["rsi14"] <= RSI_BUY_MAX):
-        rsi_blocks.append(f"RSI14 not in [{RSI_BUY_MIN:g},{RSI_BUY_MAX:g}] (RSI14={snap['rsi14']})")
-    rule2_fired = not rsi_blocks
-    decisions.append({"rule": "rule2", "label": "Buy Rule 2 - RSI", "fired": rule2_fired,
-                       "base_amount": RULE2_AMOUNT, "blocks": rsi_blocks if not rule2_fired else []})
+    rule1_conditions = [
+        (price_above_ema20, "price not above EMA20"),
+        (price_above_sma50, "price not above SMA50"),
+        (sma50_above_sma200, "SMA50 not above SMA200"),
+    ]
+    rule2_conditions = [
+        (rsi_in_range, f"RSI14 not in [{RSI_BUY_MIN:g},{RSI_BUY_MAX:g}] (RSI14={snap['rsi14']})"),
+        (price_above_ema20, "price not above EMA20"),
+        (price_above_sma50, "price not above SMA50"),
+        (sma50_above_sma200, "SMA50 not above SMA200"),
+    ]
+    rule3_conditions = [
+        (macd_above_signal, "MACD not above signal"),
+        (macd_hist_positive, "MACD histogram not positive"),
+        (price_above_ema20, "price not above EMA20"),
+        (price_above_sma50, "price not above SMA50"),
+        (sma50_above_sma200, "SMA50 not above SMA200"),
+    ]
 
-    macd_blocks = list(shared_blocks)
-    if snap["macd"] is None or snap["macd_signal"] is None or not (snap["macd"] > snap["macd_signal"]):
-        macd_blocks.append("MACD not above signal")
-    if snap["macd_histogram"] is None or not (snap["macd_histogram"] > 0):
-        macd_blocks.append("MACD histogram not positive")
-    rule3_fired = not macd_blocks
-    decisions.append({"rule": "rule3", "label": "Buy Rule 3 - MACD", "fired": rule3_fired,
-                       "base_amount": RULE3_AMOUNT, "blocks": macd_blocks if not rule3_fired else []})
+    rule1_fired, rule1_frac, rule1_failed = _rule_score(rule1_conditions)
+    rule2_fired, rule2_frac, rule2_failed = _rule_score(rule2_conditions)
+    rule3_fired, rule3_frac, rule3_failed = _rule_score(rule3_conditions)
 
-    return decisions
+    total_weight = RULE1_WEIGHT_PCT + RULE2_WEIGHT_PCT + RULE3_WEIGHT_PCT
+    weighted = (rule1_frac * RULE1_WEIGHT_PCT) + (rule2_frac * RULE2_WEIGHT_PCT) + (rule3_frac * RULE3_WEIGHT_PCT)
+    confidence_pct = (weighted / total_weight * 100) if total_weight else 0.0
+
+    confidence_blocks = list(gate_blocks)
+    if confidence_pct < CONFIDENCE_THRESHOLD_PCT:
+        confidence_blocks.append(f"confidence {confidence_pct:.1f}% below {CONFIDENCE_THRESHOLD_PCT:.0f}% threshold")
+    confidence_fired = not confidence_blocks
+
+    return [
+        {"rule": "rule1", "label": "Buy Rule 1 - Trend", "fired": rule1_fired, "blocks": rule1_failed},
+        {"rule": "rule2", "label": "Buy Rule 2 - RSI", "fired": rule2_fired, "blocks": rule2_failed},
+        {"rule": "rule3", "label": "Buy Rule 3 - MACD", "fired": rule3_fired, "blocks": rule3_failed},
+        {"rule": "confidence", "label": "Confidence Buy Rule", "fired": confidence_fired,
+         "base_amount": CONFIDENCE_BUY_AMOUNT, "blocks": confidence_blocks,
+         "confidence_pct": confidence_pct, "rule1_fired": rule1_fired,
+         "rule2_fired": rule2_fired, "rule3_fired": rule3_fired},
+    ]
 
 
 def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict,
@@ -266,6 +304,8 @@ def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d
         macd_histogram=snap["macd_histogram"], volume=snap["volume"],
         avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], spread_pct=None,
         reason=d["label"], order_result="DRY_RUN", dry_run=1,
+        rule1_fired=int(d["rule1_fired"]), rule2_fired=int(d["rule2_fired"]), rule3_fired=int(d["rule3_fired"]),
+        confidence_pct=d["confidence_pct"],
     )
 
 
@@ -449,42 +489,51 @@ def main() -> None:
         remaining_stock_cap = MAX_STOCK_BUY_PER_DAY - trade_db.daily_stock_buy_total(conn, ticker, today)
         buy_decisions = {d["rule"]: d for d in evaluate_buy(ticker, position, snap, bull_market, pstate, conn, today)}
 
-        for rule_key in RULE_PRECEDENCE:
-            d = buy_decisions[rule_key]
-            if not d["fired"]:
-                lines.append(f"    {d['label']}: no (" + "; ".join(d["blocks"]) + ")")
-                log_decision(conn, ticker, symbol, snap, "BUY", d, fired=False, executed=False,
-                             amount=None, blocks=d["blocks"], bull_market=bull_market)
-                continue
+        # Rule 1/2/3 no longer trigger independent buys - each is just a
+        # component of the weighted confidence score below. Still logged for
+        # visibility (see TRADING_RULES.md > Buy Rules - Confidence Scoring Model).
+        for rule_key in ("rule1", "rule2", "rule3"):
+            comp = buy_decisions[rule_key]
+            lines.append(f"    {comp['label']}: {'yes' if comp['fired'] else 'no'}"
+                         + (f" ({'; '.join(comp['blocks'])})" if comp["blocks"] else ""))
+            log_decision(conn, ticker, symbol, snap, "BUY", comp, fired=comp["fired"], executed=False,
+                         amount=None, blocks=comp["blocks"], bull_market=bull_market)
 
+        d = buy_decisions["confidence"]
+        confidence_note = f"confidence {d['confidence_pct']:.1f}% (threshold {CONFIDENCE_THRESHOLD_PCT:.0f}%)"
+        lines.append(f"    {d['label']}: {confidence_note}")
+
+        if not d["fired"]:
+            lines.append(f"        no buy (" + "; ".join(d["blocks"]) + ")")
+            log_decision(conn, ticker, symbol, snap, "BUY", d, fired=False, executed=False,
+                         amount=None, blocks=[confidence_note] + d["blocks"], bull_market=bull_market)
+        else:
             gate_blocks = []
             if position_closed_today:
                 gate_blocks.append("position closed by an exit rule earlier this run")
             if portfolio_blocks:
                 gate_blocks.extend(portfolio_blocks)
             if gate_blocks:
-                lines.append(f"    {d['label']}: WOULD fire, but blocked - " + "; ".join(gate_blocks))
+                lines.append(f"        WOULD fire, but blocked - " + "; ".join(gate_blocks))
                 log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
-                             amount=None, blocks=gate_blocks, bull_market=bull_market)
-                continue
-
-            amount = min(d["base_amount"] * buy_multiplier, remaining_stock_cap, remaining_portfolio_cap)
-            if amount <= 0:
-                budget_blocks = [f"no budget left (stock cap left EUR{remaining_stock_cap:.2f}, "
-                                  f"portfolio cap left EUR{remaining_portfolio_cap:.2f})"]
-                lines.append(f"    {d['label']}: WOULD fire, but no budget left "
-                             f"(stock cap left EUR{remaining_stock_cap:.2f}, portfolio cap left EUR{remaining_portfolio_cap:.2f})")
-                log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
-                             amount=None, blocks=budget_blocks, bull_market=bull_market)
-                continue
-
-            lines.append(f"    {d['label']}: BUY EUR{amount:.2f} (dry run)")
-            trade_id = log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market)
-            log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=True,
-                         amount=amount, blocks=[], bull_market=bull_market, trade_id=trade_id)
-            remaining_stock_cap -= amount
-            remaining_portfolio_cap -= amount
-            would_buy_total += amount
+                             amount=None, blocks=[confidence_note] + gate_blocks, bull_market=bull_market)
+            else:
+                amount = min(d["base_amount"] * buy_multiplier, remaining_stock_cap, remaining_portfolio_cap)
+                if amount <= 0:
+                    budget_blocks = [f"no budget left (stock cap left EUR{remaining_stock_cap:.2f}, "
+                                      f"portfolio cap left EUR{remaining_portfolio_cap:.2f})"]
+                    lines.append(f"        WOULD fire, but no budget left "
+                                 f"(stock cap left EUR{remaining_stock_cap:.2f}, portfolio cap left EUR{remaining_portfolio_cap:.2f})")
+                    log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=False,
+                                 amount=None, blocks=[confidence_note] + budget_blocks, bull_market=bull_market)
+                else:
+                    lines.append(f"        BUY EUR{amount:.2f} (dry run)")
+                    trade_id = log_buy(conn, ticker, symbol, position, snap, d, amount, bull_market)
+                    log_decision(conn, ticker, symbol, snap, "BUY", d, fired=True, executed=True,
+                                 amount=amount, blocks=[confidence_note], bull_market=bull_market, trade_id=trade_id)
+                    remaining_stock_cap -= amount
+                    remaining_portfolio_cap -= amount
+                    would_buy_total += amount
 
     lines.append("")
     lines.append(f"Total dry-run buys today: EUR{would_buy_total:.2f}")

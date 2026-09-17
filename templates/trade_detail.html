@@ -17,6 +17,12 @@
     <div>P/L EUR</div><div>{{ row['profit_loss_eur'] }}</div>
     <div>Reason</div><div>{{ row['reason'] }}</div>
     <div>Order result</div><div>{{ row['order_result'] }}</div>
+    {% if row['action'] == 'BUY' %}
+    <div>Rule 1 (Trend) fired</div><div>{{ 'yes' if row['rule1_fired'] else 'no' if row['rule1_fired'] is not none else '-' }}</div>
+    <div>Rule 2 (RSI) fired</div><div>{{ 'yes' if row['rule2_fired'] else 'no' if row['rule2_fired'] is not none else '-' }}</div>
+    <div>Rule 3 (MACD) fired</div><div>{{ 'yes' if row['rule3_fired'] else 'no' if row['rule3_fired'] is not none else '-' }}</div>
+    <div>Confidence</div><div>{{ "%.1f%%"|format(row['confidence_pct']) if row['confidence_pct'] is not none else '-' }}</div>
+    {% endif %}
   </div>
 </div>
 
