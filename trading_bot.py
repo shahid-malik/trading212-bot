@@ -274,9 +274,14 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
 
 def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict,
              qty: float, amount: float, bull_market: bool, run_id: str) -> int:
+    # timestamp = run_id, not time.strftime(): the live bot's run_id IS a real
+    # timestamp already; backtest.py's run_id is the simulated date. Using
+    # wall-clock time here would stamp every backtest trade as "today",
+    # breaking last_buy_timestamp()-based cooldown checks against historical
+    # dates (a real bug this fix corrects - see git history).
     return trade_db.record_trade(
         conn,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        timestamp=run_id,
         ticker=ticker, yahoo_symbol=symbol, action="SELL",
         order_size_eur=amount, quantity=qty, price=position["currentPrice"],
         avg_price=position["averagePrice"], current_price=position["currentPrice"],
@@ -292,9 +297,10 @@ def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict
 
 def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d: dict,
             amount: float, bull_market: bool, run_id: str) -> int:
+    # See log_sell() above: timestamp = run_id, not wall-clock time.
     return trade_db.record_trade(
         conn,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        timestamp=run_id,
         ticker=ticker, yahoo_symbol=symbol, action="BUY",
         order_size_eur=amount, quantity=amount / snap["price"], price=snap["price"],
         avg_price=position["averagePrice"] if position else None, current_price=snap["price"],
@@ -317,7 +323,7 @@ def log_decision(conn, ticker: str, symbol: str, snap: dict, side: str, d: dict,
     conditions = d.get("conditions") or []
     trade_db.record_decision(
         conn,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        timestamp=run_id,
         ticker=ticker, yahoo_symbol=symbol, side=side, rule=d["rule"], label=d["label"],
         fired=int(fired), executed=int(executed), amount_eur=amount,
         blocks="; ".join(blocks) if blocks else None,

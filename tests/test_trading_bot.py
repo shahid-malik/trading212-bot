@@ -106,10 +106,14 @@ class TestEvaluateExitPriority(unittest.TestCase):
         return p
 
     def test_emergency_stop_overrides_everything_else(self):
-        # -8% loss: emergency stop should fire and be the ONLY decision
-        # returned, even though other conditions might also look attractive.
-        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": 92.0, "ppl": -8.0}
-        snap = full_snap(price=92.0)
+        # Loss 1pt past whatever the configured threshold currently is (these
+        # constants are read from rules_config.json at import time, so this
+        # must not hardcode a specific percentage - the threshold is meant to
+        # be tunable via the web UI's Rules page).
+        loss_pct = tb.EMERGENCY_STOP_LOSS_PCT + 1
+        current_price = 100.0 * (1 - loss_pct / 100)
+        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": current_price, "ppl": -loss_pct}
+        snap = full_snap(price=current_price)
         decisions = tb.evaluate_exit(position, snap, self._pstate(), True)
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["rule"], "exit1")
@@ -117,15 +121,20 @@ class TestEvaluateExitPriority(unittest.TestCase):
         self.assertEqual(decisions[0]["sell_fraction"], 1.0)
 
     def test_small_loss_does_not_trigger_emergency_stop(self):
-        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": 95.0, "ppl": -5.0}
-        decisions = tb.evaluate_exit(position, full_snap(price=95.0), self._pstate(), True)
+        # Half the configured threshold - safely under it regardless of value.
+        loss_pct = tb.EMERGENCY_STOP_LOSS_PCT / 2
+        current_price = 100.0 * (1 - loss_pct / 100)
+        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": current_price, "ppl": -loss_pct}
+        decisions = tb.evaluate_exit(position, full_snap(price=current_price), self._pstate(), True)
         exit1 = decisions[0]
         self.assertEqual(exit1["rule"], "exit1")
         self.assertFalse(exit1["fired"])
 
     def test_bull_profit_fires_once_then_locked(self):
-        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": 104.0, "ppl": 4.0}
-        snap = full_snap(price=104.0)
+        profit_pct = tb.BULL_PROFIT_PCT + 1
+        current_price = 100.0 * (1 + profit_pct / 100)
+        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": current_price, "ppl": profit_pct}
+        snap = full_snap(price=current_price)
         decisions = tb.evaluate_exit(position, snap, self._pstate(bull_profit_lock=0), True)
         exit2 = next(d for d in decisions if d["rule"] == "exit2")
         self.assertTrue(exit2["fired"])
@@ -180,6 +189,52 @@ class TestTradingDaysBetween(unittest.TestCase):
         result = tb.add_trading_days(start, 10)
         # 10 weekdays from Monday Jan 5 -> Monday Jan 19 (two full weekends skipped)
         self.assertEqual(result.strftime("%Y-%m-%d"), "2026-01-19")
+
+
+class TestLoggedTimestampMatchesRunId(unittest.TestCase):
+    """Regression test for a real bug: log_buy/log_sell/log_decision used to
+    stamp trades with time.strftime() (real wall-clock time) instead of the
+    caller-supplied run_id. That's harmless for the live bot (run_id IS real
+    time there) but silently broke backtest.py: every simulated historical
+    trade got stamped as "today", which made every subsequent
+    last_buy_timestamp()-based cooldown check compare a future timestamp
+    against an earlier simulated date, permanently locking each ticker out
+    after its first-ever buy. A 5-year backtest went from 13 buys to 165 once
+    this was fixed - see git history for the full writeup."""
+
+    def setUp(self):
+        self.conn = make_conn()
+
+    def test_log_buy_uses_run_id_not_wall_clock(self):
+        historical_run_id = "2022-03-15"  # deliberately not today's real date
+        confidence = {"rule": "confidence", "label": "Confidence Buy Rule",
+                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True,
+                      "confidence_pct": 95.0}
+        snap = full_snap()
+        trade_id = tb.log_buy(self.conn, "TEST", "TEST", None, snap, confidence, 20.0, True, historical_run_id)
+        row = self.conn.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        self.assertEqual(row[0], historical_run_id)
+
+    def test_log_sell_uses_run_id_not_wall_clock(self):
+        historical_run_id = "2022-03-15"
+        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": 90.0, "ppl": -10.0}
+        d = {"rule": "exit1", "label": "Exit Rule 1 - Emergency Stop", "profit_pct": -10.0}
+        trade_id = tb.log_sell(self.conn, "TEST", "TEST", position, full_snap(price=90.0), d, 1.0, 90.0, True, historical_run_id)
+        row = self.conn.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        self.assertEqual(row[0], historical_run_id)
+
+    def test_cooldown_correctly_expires_against_a_later_simulated_date(self):
+        # The actual failure mode: a buy dated (correctly) in the past, then a
+        # cooldown check against a LATER simulated date, must find the
+        # cooldown expired once enough trading days have passed.
+        confidence = {"rule": "confidence", "label": "Confidence Buy Rule",
+                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True,
+                      "confidence_pct": 95.0}
+        tb.log_buy(self.conn, "TEST", "TEST", None, full_snap(), confidence, 20.0, True, "2022-01-03")
+        pstate = trade_db.get_position_state(self.conn, "TEST")
+        decisions = tb.evaluate_buy("TEST", None, full_snap(), True, pstate, self.conn, "2022-01-10")
+        gates = next(d for d in decisions if d["rule"] == "gates")
+        self.assertTrue(gates["fired"], f"cooldown should have expired by 2022-01-10: {gates['blocks']}")
 
 
 if __name__ == "__main__":
