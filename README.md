@@ -1,11 +1,36 @@
 # Defensive Trading Bot for Trading 212
 
+**v1.0** — 2026-09-18
+
 An algorithmic trading toolkit for Trading 212 focused on **defensive, rule-based
 trend and momentum trading**. It combines market-regime analysis, technical
 indicators, position sizing, portfolio risk management, and a full buy+sell
 dry-run bot — plus the plumbing to pull your live portfolio, screen a
 watchlist, and log every (simulated) trade with full indicator context for later
 analysis.
+
+## Release notes
+
+### v1.0 (2026-09-18)
+
+- Portfolio pull + technical screener over a watchlist.
+- Full buy + sell dry-run rule engine: buy decisions via a weighted confidence
+  score (Rule 1 Trend 40% / Rule 3 MACD 35% / Rule 2 RSI 25%, executes above a
+  90% threshold), all 4 exit rules firing independently and immediately.
+- Position/day, portfolio/day, and 80%/20% exposure caps; drawdown-based buy
+  throttling.
+- Full audit trail: ~30 individually-named conditions logged per ticker per
+  run, whether they passed or not, correlated by a shared run ID.
+- Local web UI (Trades, Decisions, Watchlist, Rules pages), `127.0.0.1` only.
+- Daily `launchd` automation for the screener and bot.
+- **No live order placement anywhere in the codebase** — this release is
+  dry-run only, by design.
+
+Known limitations: earnings-date and bid/ask-spread filters aren't enforced
+(no free data source, flagged explicitly every run); trading-day cooldowns
+approximate calendar weekdays; daily-loss check compares once-daily snapshots,
+not true intraday monitoring. See `TRADING_RULES.md` > Known Implementation
+Gaps for details.
 
 ## Current status
 
