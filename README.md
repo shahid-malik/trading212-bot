@@ -11,6 +11,30 @@ analysis.
 
 ## Release notes
 
+### Unreleased
+
+- **Backtesting** (`backtest.py`): runs `trading_bot.py`'s exact
+  `evaluate_buy()`/`evaluate_exit()` against historical daily bars, so
+  backtest results can't drift from live dry-run behavior — only the data
+  source (historical vs live) and portfolio bookkeeping (simulated fills vs
+  real T212 state) differ. Writes to an isolated `backtest.db`, wiped and
+  rebuilt every run.
+- **Performance/accuracy metrics** (`metrics.py`): total return, CAGR, max
+  drawdown, Sharpe ratio, win rate, profit factor, expectancy per trade, and
+  per-rule signal accuracy (does Rule 1/2/3 firing actually predict a
+  profitable next sell?) — works against either the live `trades.db` or
+  `backtest.db`.
+- **Dashboard page** in the web UI: equity curve chart, KPI cards, rule
+  accuracy table, toggle between Live and Backtest data. Now the default
+  landing page.
+- **Fixed a real bug**: the buy cooldown check used `datetime.now()` (real
+  wall-clock time) instead of the simulated date, which would have silently
+  broken cooldown logic in a backtest. Now takes the caller's reference date
+  explicitly, correct in both live and backtest use.
+- **57 automated tests** (`tests/`, stdlib `unittest`, no network/DB
+  dependency): indicator math edge cases, confidence-score weighting,
+  exit-rule priority ordering, and KPI calculations on known inputs.
+
 ### v1.0 (2026-09-18)
 
 - Portfolio pull + technical screener over a watchlist.
@@ -42,7 +66,9 @@ Gaps for details.
 | Sell / exit rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
 | Live order execution (buy or sell) | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
 | Trade logging with full indicator snapshot | ✅ working (`trade_db.py`, SQLite) |
-| Backtesting | ❌ not built yet |
+| Backtesting | ✅ working (`backtest.py`) — reuses the live bot's own rule functions against historical bars |
+| Performance/accuracy KPIs + dashboard | ✅ working (`metrics.py`, web UI Dashboard page) |
+| Automated tests | ✅ 57 tests, no network/DB dependency (`tests/`) |
 
 The bot only ever considers tickers listed in `watchlist.csv` — it never scans
 the broader market. Add a ticker there (with its Yahoo Finance symbol) to bring
@@ -97,6 +123,9 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 | `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: `trades` (logged buy/sell with full indicator snapshot), `decisions` (every rule evaluated, fired or not), `equity_snapshots` (peak/drawdown tracking), and `position_state` (exit-rule bookkeeping: bull profit lock, trailing stop, emergency-stop cooldown). |
 | `log_trade.py` | CLI to manually log a real trade you placed yourself in the T212 app, auto-filling indicators + P&L. |
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
+| `backtest.py` | Runs `trading_bot.py`'s exact rule functions against historical daily bars into an isolated `backtest.db`. See Backtesting below. |
+| `metrics.py` | Performance/accuracy KPIs (return, CAGR, drawdown, Sharpe, win rate, profit factor, per-rule signal accuracy) from either `trades.db` or `backtest.db`. |
+| `tests/` | 57 automated tests (stdlib `unittest`, no network/DB dependency) covering indicator math, confidence scoring, exit-rule priority, and KPI math. |
 | `TRADING_RULES.md` | The authoritative strategy spec. |
 | `run_screener.sh` / `run_bot.sh` + `launchd` | Daily automation for the screener and dry-run bot (see below). |
 | `gmail_draft.py` / `daily_alert.py` | Optional: create a Gmail draft with the daily screener report. Requires a one-time local OAuth setup (see `gmail_draft.py` docstring) — not yet configured. |
@@ -123,7 +152,33 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 .venv/bin/python3 trading_bot.py                        # dry-run buy+sell evaluation, logs to trades.db
 .venv/bin/python3 log_trade.py --ticker MSFT_US_EQ --action BUY --price 495.17 --qty 0.02 --reason "Buy Rule 1 - Trend"
 .venv/bin/python3 export_trades.py trades_export.csv     # dump trade log to CSV
+.venv/bin/python3 backtest.py                            # backtest against historical bars, logs to backtest.db
+.venv/bin/python3 -m unittest discover -s tests -t .     # run the test suite (57 tests, ~instant)
 ```
+
+## Backtesting
+
+```bash
+.venv/bin/python3 backtest.py --range 5y --capital 1000
+```
+
+Reuses `trading_bot.py`'s exact `evaluate_buy()`/`evaluate_exit()` functions
+against historical daily bars fetched once per ticker, walked forward day by
+day computing indicators from only the data visible up to that day (no
+lookahead). Writes to an isolated `backtest.db` (wiped and rebuilt every run),
+using the same schema as the live bot, so `metrics.py` and the Dashboard work
+identically against either.
+
+**Real limitations** — read before drawing conclusions:
+- **Survivorship/lookahead bias**: `watchlist.csv` is today's list, applied
+  retroactively across the whole backtest window. You didn't actually have
+  these 13 tickers on your radar 5 years ago.
+- **No transaction costs, slippage, or realistic fill-price modeling** — fills
+  happen at that day's close.
+- **Free daily bars only** — no intraday data; relies on Yahoo's own
+  adjusted-close handling for splits/dividends.
+- `--range` accepts `1y`/`2y`/`5y`/`10y`/`max`; the first 200 trading days of
+  whatever you fetch are warmup for SMA200 and aren't simulated.
 
 ## Web UI
 
@@ -132,8 +187,14 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 open http://127.0.0.1:5050
 ```
 
-Local only (binds to `127.0.0.1`, not exposed to your network). Four pages:
+Local only (binds to `127.0.0.1`, not exposed to your network). Five pages:
 
+- **Dashboard** (default landing page) — equity curve chart, KPI cards (total
+  return, CAGR, max drawdown, Sharpe ratio, win rate, profit factor,
+  expectancy per trade), and a per-rule signal-accuracy table (does Rule 1/2/3
+  firing actually predict a profitable next sell?). Toggle between **Live**
+  (your real dry-run history) and **Backtest** (`backtest.db`, run
+  `backtest.py` first) data sources.
 - **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
   that actually got logged, including which of Rule 1/2/3 individually fired and
   the computed confidence % for every BUY row. Each row also has an "All rules"
@@ -167,6 +228,23 @@ trading, so both are safe to run unattended.
 Note: launchd-spawned processes are subject to macOS's TCC privacy protections
 for `~/Documents`. If a scheduled job fails with "Operation not permitted",
 grant Full Disk Access to `/bin/bash` in System Settings → Privacy & Security.
+
+## Testing
+
+```bash
+.venv/bin/python3 -m unittest discover -s tests -t .
+```
+
+57 tests, stdlib `unittest`, no network calls and no dependency on `trades.db`
+(each test uses its own in-memory SQLite connection or pure function inputs) -
+runs in milliseconds. Covers indicator math (SMA/EMA/RSI/MACD/ATR edge cases:
+insufficient history, flat prices, all-gains/all-losses), the confidence-score
+weighting math, exit-rule priority ordering (emergency stop overrides
+everything; trailing stop only evaluated once armed; profit-lock prevents
+re-firing), trading-day cooldown counting, and the KPI calculations in
+`metrics.py` on known inputs. Run these before trusting a rule change or a
+refactor - several were caught by writing this suite (see git history for
+`tests/`).
 
 ## Safety
 

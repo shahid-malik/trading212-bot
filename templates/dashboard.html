@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Trading212 Bot{% endblock %}
+{% block content %}
+
+<div class="filters" style="margin-bottom:20px;">
+  <a href="{{ url_for('dashboard', source='live') }}"><button type="button" {% if source != 'backtest' %}style="opacity:1;"{% else %}style="background:#889;" {% endif %}>Live (dry-run)</button></a>
+  <a href="{{ url_for('dashboard', source='backtest') }}"><button type="button" {% if source == 'backtest' %}style="opacity:1;"{% else %}style="background:#889;" {% endif %}>Backtest</button></a>
+</div>
+
+{% if not available %}
+<div class="card">
+  <p class="muted">
+    {% if source == 'backtest' %}
+    No backtest data yet. Run <code>.venv/bin/python3 backtest.py</code> to generate it.
+    {% else %}
+    No live dry-run data yet. Run <code>.venv/bin/python3 trading_bot.py</code> at least once.
+    {% endif %}
+  </p>
+</div>
+{% else %}
+
+<p class="muted">
+  This measures what the logged {{ 'backtest' if source == 'backtest' else 'dry-run' }} trades actually
+  did - not a guarantee of future performance. All figures are dry-run/simulated; nothing here reflects real executed orders.
+  {% if source == 'backtest' %}Backtest uses today's watchlist applied retroactively and free daily bars with no transaction costs modeled - see <code>TRADING_RULES.md</code> &gt; Backtesting Limitations.{% endif %}
+</p>
+
+<div class="card">
+  <h2>Equity curve</h2>
+  {{ svg|safe }}
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-label">Total return</div>
+    <div class="kpi-value {% if s.total_return_pct and s.total_return_pct >= 0 %}ok-text{% elif s.total_return_pct %}bad-text{% endif %}">
+      {{ "%+.1f%%"|format(s.total_return_pct) if s.total_return_pct is not none else "-" }}
+    </div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">CAGR (annualized)</div>
+    <div class="kpi-value">{{ "%+.1f%%"|format(s.cagr_pct) if s.cagr_pct is not none else "-" }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Max drawdown</div>
+    <div class="kpi-value bad-text">{{ "%.1f%%"|format(s.max_drawdown_pct) if s.max_drawdown_pct is not none else "-" }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Sharpe ratio</div>
+    <div class="kpi-value">{{ "%.2f"|format(s.sharpe_ratio) if s.sharpe_ratio is not none else "-" }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Win rate</div>
+    <div class="kpi-value">{{ "%.0f%%"|format(s.trades.win_rate_pct) if s.trades.win_rate_pct is not none else "-" }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Profit factor</div>
+    <div class="kpi-value">
+      {% if s.trades.profit_factor is none %}-
+      {% elif s.trades.profit_factor > 1000000 %}&infin;
+      {% else %}{{ "%.2f"|format(s.trades.profit_factor) }}{% endif %}
+    </div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Expectancy / trade</div>
+    <div class="kpi-value">{{ "%+.1f%%"|format(s.trades.expectancy_pct) if s.trades.expectancy_pct is not none else "-" }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Buys / Sells</div>
+    <div class="kpi-value">{{ s.trades.buy_count }} / {{ s.trades.sell_count }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Signal accuracy by rule</h2>
+  <p class="muted">Among executed buys where that rule's own conditions fired, what
+  fraction of the ticker's next sell afterward was profitable? Small sample sizes
+  are noisy - check "buys with signal" before trusting a percentage.</p>
+  <table>
+    <thead><tr><th>Rule</th><th>Buys with signal</th><th>Next sell profitable</th></tr></thead>
+    <tbody>
+      {% for r in s.rule_accuracy %}
+      <tr>
+        <td>{{ r.rule }}</td>
+        <td>{{ r.buys_with_signal }}</td>
+        <td>{{ "%.0f%%"|format(r.next_sell_profitable_pct) if r.next_sell_profitable_pct is not none else "no data yet" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Win / loss breakdown</h2>
+  <div class="kv">
+    <div>Average win</div><div class="ok-text">{{ "%+.1f%%"|format(s.trades.avg_win_pct) if s.trades.avg_win_pct is not none else "-" }}</div>
+    <div>Average loss</div><div class="bad-text">{{ "%+.1f%%"|format(s.trades.avg_loss_pct) if s.trades.avg_loss_pct is not none else "-" }}</div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}

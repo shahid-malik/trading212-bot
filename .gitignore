@@ -222,5 +222,6 @@ __marimo__/
 credentials.json
 token.json
 trades.db
+backtest.db
 reports/
 .DS_Store

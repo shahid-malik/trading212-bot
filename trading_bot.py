@@ -209,7 +209,10 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
     last_buy_ts = trade_db.last_buy_timestamp(conn, ticker)
     cooldown_ok = True
     if last_buy_ts:
-        cooldown_ok = trading_days_between(datetime.fromisoformat(last_buy_ts), datetime.now()) >= BUY_COOLDOWN_TRADING_DAYS
+        # Uses `today` (the caller's reference date), not wall-clock time - the
+        # live bot passes real today, backtest.py passes the simulated date, so
+        # this works correctly in both without duplicating the logic.
+        cooldown_ok = trading_days_between(datetime.fromisoformat(last_buy_ts), datetime.fromisoformat(today)) >= BUY_COOLDOWN_TRADING_DAYS
 
     emergency_cooldown_ok = True
     if pstate["emergency_stop_until"]:
@@ -473,7 +476,7 @@ def main() -> None:
 
                 if d.get("closes_position"):
                     if d["rule"] == "exit1":
-                        emergency_until = add_trading_days(datetime.now(), EMERGENCY_STOP_COOLDOWN_DAYS).strftime("%Y-%m-%d")
+                        emergency_until = add_trading_days(datetime.fromisoformat(today), EMERGENCY_STOP_COOLDOWN_DAYS).strftime("%Y-%m-%d")
                         trade_db.mark_simulated_closed(conn, ticker, d["label"], position["averagePrice"])
                         trade_db.set_position_state(conn, ticker, emergency_stop_until=emergency_until)
                         lines.append(f"        -> position closed (simulated), re-entry blocked until {emergency_until}")

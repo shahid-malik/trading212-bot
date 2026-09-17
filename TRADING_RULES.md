@@ -11,7 +11,34 @@ Status: **full buy + sell dry-run bot exists** (`trading_bot.py`). It evaluates
 every rule below — market filter, all 3 buy rules, all 4 exit rules, the 80/20
 exposure cap, drawdown/daily-loss gates — and logs what it *would* do. It places
 no real orders of either kind; nothing in this repo calls Trading212's
-order-placement endpoint.
+order-placement endpoint. `backtest.py` runs these exact same rule functions
+against historical data (see Backtesting Limitations below), and `metrics.py`
++ the web UI's Dashboard page turn either the live or backtest trade log into
+performance KPIs.
+
+### Backtesting Limitations
+
+`backtest.py` reuses `trading_bot.py`'s `evaluate_buy()`/`evaluate_exit()`
+directly, so the backtest can't drift from what the live bot actually does -
+but the simulation itself has real limitations:
+
+- **Survivorship/lookahead bias**: `watchlist.csv` reflects tickers you're
+  watching *today*, applied retroactively across the whole backtest window.
+  You didn't actually have this watchlist 5 years ago, and it excludes
+  whatever you might have removed or whatever went to zero and dropped off
+  your radar.
+- **No transaction costs, slippage, spread, or realistic fill modeling** -
+  every fill happens exactly at that day's closing price.
+- **Free daily bars only** (Yahoo Finance) - no intraday data, and relies on
+  Yahoo's own adjusted-close handling for splits/dividends rather than an
+  independently verified corporate-actions feed.
+- **Earnings-date and spread filters are unenforced here too**, same as live
+  (see Known Implementation Gaps below).
+- A backtest run is not a promise about future performance. It's a measurement
+  of what this specific rule set, against this specific watchlist, would have
+  produced over this specific historical window - useful for catching
+  obviously broken logic or wildly miscalibrated thresholds, not for
+  concluding the strategy "works."
 
 ### Dry-run sell simulation — how state survives across runs
 

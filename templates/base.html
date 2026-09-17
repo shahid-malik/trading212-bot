@@ -33,6 +33,10 @@
   .rule-group li { list-style: none; margin-left: -18px; padding: 1px 0; }
   .ok-text { color: #1a7431; }
   .bad-text { color: #a91c1c; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi-card { background: #fff; padding: 14px 16px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .kpi-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
+  .kpi-value { font-size: 22px; font-weight: 700; }
   .filters { display: flex; gap: 10px; margin-bottom: 16px; align-items: end; flex-wrap: wrap; }
   .filters label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
   select, input[type=number], input[type=text] { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
@@ -57,6 +61,7 @@
 <header>
   <h1>Trading212 Bot</h1>
   <nav>
+    <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a>
     <a href="{{ url_for('trades') }}" class="{% if request.endpoint in ['trades','trade_detail'] %}active{% endif %}">Trades</a>
     <a href="{{ url_for('decisions') }}" class="{% if request.endpoint == 'decisions' %}active{% endif %}">Decisions</a>
     <a href="{{ url_for('watchlist') }}" class="{% if request.endpoint == 'watchlist' %}active{% endif %}">Watchlist</a>

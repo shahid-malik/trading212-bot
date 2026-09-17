@@ -18,12 +18,44 @@ from pathlib import Path
 from flask import Flask, redirect, render_template, request, url_for
 
 import config as botconfig
+import metrics
 import trade_db
 
 HERE = Path(__file__).parent
 WATCHLIST_PATH = HERE / "watchlist.csv"
 WATCHLIST_FIELDS = ["t212_ticker", "yahoo_symbol", "name", "notes"]
+BACKTEST_DB_PATH = HERE / "backtest.db"
 app = Flask(__name__)
+
+
+def equity_curve_svg(curve: list[tuple[str, float]], width: int = 760, height: int = 220) -> str:
+    """Minimal server-rendered line chart - no JS/chart library needed."""
+    if len(curve) < 2:
+        return '<p class="muted">Not enough equity history to chart yet.</p>'
+
+    pad = 30
+    values = [v for _, v in curve]
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1.0
+    n = len(curve)
+
+    def x_of(i: int) -> float:
+        return pad + (i / (n - 1)) * (width - 2 * pad)
+
+    def y_of(v: float) -> float:
+        return height - pad - ((v - lo) / span) * (height - 2 * pad)
+
+    points = " ".join(f"{x_of(i):.1f},{y_of(v):.1f}" for i, (_, v) in enumerate(curve))
+    start_date, end_date = curve[0][0], curve[-1][0]
+
+    return f'''<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" aria-label="Equity curve">
+      <line x1="{pad}" y1="{height-pad}" x2="{width-pad}" y2="{height-pad}" stroke="#ccc" stroke-width="1"/>
+      <polyline points="{points}" fill="none" stroke="#14213d" stroke-width="1.6"/>
+      <text x="{pad}" y="{height-8}" font-size="11" fill="#888">{start_date}</text>
+      <text x="{width-pad}" y="{height-8}" font-size="11" fill="#888" text-anchor="end">{end_date}</text>
+      <text x="{pad}" y="14" font-size="11" fill="#888">EUR{hi:,.0f}</text>
+      <text x="{pad}" y="{height-pad-4}" font-size="11" fill="#888">EUR{lo:,.0f}</text>
+    </svg>'''
 
 
 def load_watchlist_rows() -> list[dict]:
@@ -41,7 +73,7 @@ def write_watchlist_rows(rows: list[dict]) -> None:
 
 @app.route("/")
 def home():
-    return redirect(url_for("trades"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/rules", methods=["GET", "POST"])
@@ -168,6 +200,22 @@ def watchlist_remove():
     rows = [r for r in load_watchlist_rows() if r["t212_ticker"] != ticker]
     write_watchlist_rows(rows)
     return redirect(url_for("watchlist", removed=ticker))
+
+
+@app.route("/dashboard")
+def dashboard():
+    source = request.args.get("source", "live")
+    db_path = BACKTEST_DB_PATH if source == "backtest" else trade_db.DB_PATH
+
+    if not db_path.exists():
+        return render_template("dashboard.html", source=source, available=False, svg=None, s=None)
+
+    conn = trade_db.get_conn(db_path)
+    s = metrics.summary(conn)
+    conn.close()
+
+    svg = equity_curve_svg(s["equity_curve"])
+    return render_template("dashboard.html", source=source, available=True, svg=svg, s=s)
 
 
 if __name__ == "__main__":

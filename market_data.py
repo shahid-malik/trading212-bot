@@ -124,10 +124,10 @@ def atr(highs: list[float], lows: list[float], closes: list[float], period: int 
     return sum(true_ranges) / period
 
 
-def indicator_snapshot(symbol: str) -> dict:
-    """Full indicator set for trade logging: needs ~1y+ of history for SMA200."""
-    bars = fetch_daily_bars(symbol, range_="2y")
-    closes, highs, lows, volumes = bars["close"], bars["high"], bars["low"], bars["volume"]
+def indicators_from_bars(closes: list[float], highs: list[float], lows: list[float], volumes: list[float]) -> dict:
+    """Point-in-time indicator computation from a bars slice - the caller decides
+    how much history is visible (live code passes everything fetched; backtest.py
+    passes closes[:i+1] etc. for day i, so nothing "sees" future data)."""
     macd_val, signal_val, hist_val = macd(closes)
     return {
         "price": closes[-1],
@@ -146,12 +146,23 @@ def indicator_snapshot(symbol: str) -> dict:
     }
 
 
-def spy_regime() -> dict:
-    """Bull market filter per TRADING_RULES.md: SPY > SMA200 AND SMA50 > SMA200."""
-    bars = fetch_daily_bars("SPY", range_="2y")
-    closes = bars["close"]
+def indicator_snapshot(symbol: str) -> dict:
+    """Full indicator set for trade logging: needs ~1y+ of history for SMA200."""
+    bars = fetch_daily_bars(symbol, range_="2y")
+    return indicators_from_bars(bars["close"], bars["high"], bars["low"], bars["volume"])
+
+
+def spy_regime_from_closes(closes: list[float]) -> dict:
+    """Point-in-time bull market filter per TRADING_RULES.md: SPY > SMA200 AND
+    SMA50 > SMA200, computed from whatever closes are visible to the caller."""
     price = closes[-1]
     s50 = sma(closes, 50)
     s200 = sma(closes, 200)
     bull = bool(s50 and s200 and price > s200 and s50 > s200)
     return {"bull_market": bull, "spy_price": price, "spy_sma50": s50, "spy_sma200": s200}
+
+
+def spy_regime() -> dict:
+    """Bull market filter per TRADING_RULES.md: SPY > SMA200 AND SMA50 > SMA200."""
+    bars = fetch_daily_bars("SPY", range_="2y")
+    return spy_regime_from_closes(bars["close"])
