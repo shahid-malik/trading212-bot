@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Rules - Trading212 Bot{% endblock %}
+{% block content %}
+<p class="muted">
+  Changes here write to <code>rules_config.json</code> and take effect on the
+  <strong>next</strong> run of <code>trading_bot.py</code> (manual or scheduled) -
+  they don't affect a run already in progress. This bot is dry-run only: nothing
+  here changes whether real orders get placed, only the thresholds the dry-run
+  evaluation uses.
+</p>
+
+{% if saved %}<div class="flash-ok">Saved.</div>{% endif %}
+{% if error %}<div class="flash-err">{{ error }}</div>{% endif %}
+
+<form method="post">
+  {% for group_name, fields in groups %}
+  <div class="card">
+    <h2>{{ group_name }}</h2>
+    {% for key, label in fields %}
+    <div class="field-row">
+      <label for="{{ key }}">{{ label }}</label>
+      <input type="number" step="any" id="{{ key }}" name="{{ key }}" value="{{ cfg[key] }}">
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <button type="submit">Save rules</button>
+</form>
+{% endblock %}

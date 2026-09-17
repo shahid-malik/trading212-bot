@@ -2,7 +2,10 @@
 
 Source of truth for the automated strategy. Any bot/screener logic in this project
 should implement exactly this, not a reinterpretation of it. If a rule changes, edit
-it here first.
+it here first — including if you change a numeric threshold via the web UI's Rules
+page (`webapp.py`), which edits `rules_config.json`. Keep this document and that
+file in agreement; this document explains *why* a value is what it is, the config
+file is just the value.
 
 Status: **full buy + sell dry-run bot exists** (`trading_bot.py`). It evaluates
 every rule below — market filter, all 3 buy rules, all 4 exit rules, the 80/20

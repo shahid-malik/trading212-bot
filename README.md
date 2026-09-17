@@ -66,17 +66,20 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 | `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. |
 | `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic. Not a prediction — a filter. |
 | `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
-| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: trade log with full indicator snapshot, plus an `equity_snapshots` table for peak/drawdown tracking. |
+| `config.py` / `rules_config.json` | Editable strategy parameters (position caps, drawdown thresholds, buy/exit rule amounts and percentages). `trading_bot.py` reads this at import time; the web UI writes to it. |
+| `webapp.py` + `templates/` | Local web UI (Flask, `127.0.0.1` only) to edit rule values and browse the trade log with full indicator context. See below. |
+| `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: trade log with full indicator snapshot, an `equity_snapshots` table for peak/drawdown tracking, and `position_state` for exit-rule bookkeeping (bull profit lock, trailing stop, emergency-stop cooldown). |
 | `log_trade.py` | CLI to manually log a real trade you placed yourself in the T212 app, auto-filling indicators + P&L. |
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
 | `TRADING_RULES.md` | The authoritative strategy spec. |
-| `run_screener.sh` + `launchd` | Daily automation for the screener (see below). |
+| `run_screener.sh` / `run_bot.sh` + `launchd` | Daily automation for the screener and dry-run bot (see below). |
 | `gmail_draft.py` / `daily_alert.py` | Optional: create a Gmail draft with the daily screener report. Requires a one-time local OAuth setup (see `gmail_draft.py` docstring) — not yet configured. |
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
+.venv/bin/pip install flask                                          # for webapp.py
 .venv/bin/pip install google-auth-oauthlib google-api-python-client  # only needed for gmail_draft.py
 
 cp .env.example .env
@@ -95,6 +98,23 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 .venv/bin/python3 log_trade.py --ticker MSFT_US_EQ --action BUY --price 495.17 --qty 0.02 --reason "Buy Rule 1 - Trend"
 .venv/bin/python3 export_trades.py trades_export.csv     # dump trade log to CSV
 ```
+
+## Web UI
+
+```bash
+.venv/bin/python3 webapp.py
+open http://127.0.0.1:5050
+```
+
+Local only (binds to `127.0.0.1`, not exposed to your network). Two pages:
+
+- **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of everything
+  in `trades.db`; click a row for the full indicator snapshot (SMA/EMA/RSI/MACD/
+  ATR/volume/SPY regime) that was true at that moment.
+- **Rules** — every tunable from `TRADING_RULES.md` (position caps, drawdown
+  thresholds, buy amounts, exit thresholds) as an editable form, grouped to match
+  the spec's sections. Saves to `rules_config.json`; `trading_bot.py` picks up
+  changes on its next run.
 
 ## Automation
 

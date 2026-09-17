@@ -27,38 +27,43 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import config as botconfig
 import market_data
 import t212_portfolio as t212
 import trade_db
 
 HERE = Path(__file__).parent
 
-# --- TRADING_RULES.md constants -------------------------------------------------
-MAX_POSITION_PER_STOCK = 100.0
-MAX_STOCK_BUY_PER_DAY = 20.0
-MAX_PORTFOLIO_BUY_PER_DAY = 50.0
-MAX_INVESTED_PCT = 80.0
-MIN_CASH_PCT = 20.0
-DAILY_LOSS_LIMIT_PCT = 1.5
-DRAWDOWN_REDUCE_PCT = 5.0
-DRAWDOWN_REDUCE_FACTOR = 0.60  # reduce buy amounts by 60% -> multiplier 0.40
-DRAWDOWN_STOP_PCT = 8.0
-BUY_COOLDOWN_TRADING_DAYS = 3
+# --- Editable via webapp.py (Rules page) -> rules_config.json -------------------
+CFG = botconfig.load_config()
 
-RULE1_AMOUNT = 10.0
-RULE2_AMOUNT = 10.0
-RULE3_AMOUNT = 20.0
+MAX_POSITION_PER_STOCK = CFG["max_position_per_stock"]
+MAX_STOCK_BUY_PER_DAY = CFG["max_stock_buy_per_day"]
+MAX_PORTFOLIO_BUY_PER_DAY = CFG["max_portfolio_buy_per_day"]
+MAX_INVESTED_PCT = CFG["max_invested_pct"]
+MIN_CASH_PCT = CFG["min_cash_pct"]
+DAILY_LOSS_LIMIT_PCT = CFG["daily_loss_limit_pct"]
+DRAWDOWN_REDUCE_PCT = CFG["drawdown_reduce_pct"]
+DRAWDOWN_REDUCE_FACTOR = CFG["drawdown_reduce_factor"]  # reduce buy amounts by this fraction
+DRAWDOWN_STOP_PCT = CFG["drawdown_stop_pct"]
+BUY_COOLDOWN_TRADING_DAYS = int(CFG["buy_cooldown_trading_days"])
+
+RULE1_AMOUNT = CFG["rule1_amount"]
+RULE2_AMOUNT = CFG["rule2_amount"]
+RULE3_AMOUNT = CFG["rule3_amount"]
+RSI_BUY_MIN = CFG["rsi_buy_min"]
+RSI_BUY_MAX = CFG["rsi_buy_max"]
 # Precedence per TRADING_RULES.md Resolved Definitions: Rule 1 > Rule 3 > Rule 2
 RULE_PRECEDENCE = ["rule1", "rule3", "rule2"]
 
-EMERGENCY_STOP_LOSS_PCT = 7.0
-EMERGENCY_STOP_COOLDOWN_DAYS = 10
-BULL_PROFIT_PCT = 3.0
-BULL_PROFIT_SELL_FRACTION = 0.5
-BREAKOUT_PROFIT_PCT = 10.0
-BREAKOUT_SELL_FRACTION = 0.25
-BREAKOUT_VOLUME_MULT = 1.5
-TRAILING_STOP_ATR_MULT = 2.0
+EMERGENCY_STOP_LOSS_PCT = CFG["emergency_stop_loss_pct"]
+EMERGENCY_STOP_COOLDOWN_DAYS = int(CFG["emergency_stop_cooldown_days"])
+BULL_PROFIT_PCT = CFG["bull_profit_pct"]
+BULL_PROFIT_SELL_FRACTION = CFG["bull_profit_sell_fraction"]
+BREAKOUT_PROFIT_PCT = CFG["breakout_profit_pct"]
+BREAKOUT_SELL_FRACTION = CFG["breakout_sell_fraction"]
+BREAKOUT_VOLUME_MULT = CFG["breakout_volume_mult"]
+TRAILING_STOP_ATR_MULT = CFG["trailing_stop_atr_mult"]
 
 
 def trading_days_between(start: datetime, end: datetime) -> int:
@@ -209,8 +214,8 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
                        "base_amount": RULE1_AMOUNT, "blocks": list(shared_blocks) if not rule1_fired else []})
 
     rsi_blocks = list(shared_blocks)
-    if snap["rsi14"] is None or not (55 <= snap["rsi14"] <= 65):
-        rsi_blocks.append(f"RSI14 not in [55,65] (RSI14={snap['rsi14']})")
+    if snap["rsi14"] is None or not (RSI_BUY_MIN <= snap["rsi14"] <= RSI_BUY_MAX):
+        rsi_blocks.append(f"RSI14 not in [{RSI_BUY_MIN:g},{RSI_BUY_MAX:g}] (RSI14={snap['rsi14']})")
     rule2_fired = not rsi_blocks
     decisions.append({"rule": "rule2", "label": "Buy Rule 2 - RSI", "fired": rule2_fired,
                        "base_amount": RULE2_AMOUNT, "blocks": rsi_blocks if not rule2_fired else []})
