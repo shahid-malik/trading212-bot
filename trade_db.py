@@ -51,16 +51,37 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
     total_equity REAL,
     recorded_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS position_state (
+    ticker TEXT PRIMARY KEY,
+    bull_profit_lock INTEGER NOT NULL DEFAULT 0,
+    trailing_stop_active INTEGER NOT NULL DEFAULT 0,
+    trailing_stop_highest_price REAL,
+    emergency_stop_until TEXT,
+    simulated_open INTEGER NOT NULL DEFAULT 1,
+    last_known_avg_price REAL,
+    close_reason TEXT,
+    updated_at TEXT
+);
 """
+
+
+_MIGRATIONS = [
+    "ALTER TABLE trades ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE position_state ADD COLUMN simulated_open INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE position_state ADD COLUMN last_known_avg_price REAL",
+    "ALTER TABLE position_state ADD COLUMN close_reason TEXT",
+]
 
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
-    try:
-        conn.execute("ALTER TABLE trades ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass  # column already exists (pre-existing db created before this field was added)
+    for stmt in _MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists (pre-existing db created before this field was added)
     conn.commit()
     return conn
 
@@ -126,3 +147,53 @@ def last_buy_timestamp(conn: sqlite3.Connection, ticker: str) -> str | None:
         (ticker,),
     ).fetchone()
     return row[0] if row else None
+
+
+def get_position_state(conn: sqlite3.Connection, ticker: str) -> dict:
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM position_state WHERE ticker = ?", (ticker,)).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "ticker": ticker,
+        "bull_profit_lock": 0,
+        "trailing_stop_active": 0,
+        "trailing_stop_highest_price": None,
+        "emergency_stop_until": None,
+        "simulated_open": 1,
+        "last_known_avg_price": None,
+        "close_reason": None,
+        "updated_at": None,
+    }
+
+
+def set_position_state(conn: sqlite3.Connection, ticker: str, **fields) -> None:
+    fields["ticker"] = ticker
+    fields["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    columns = ", ".join(fields.keys())
+    placeholders = ", ".join("?" for _ in fields)
+    updates = ", ".join(f"{k}=excluded.{k}" for k in fields if k != "ticker")
+    conn.execute(
+        f"""INSERT INTO position_state ({columns}) VALUES ({placeholders})
+            ON CONFLICT(ticker) DO UPDATE SET {updates}""",
+        list(fields.values()),
+    )
+    conn.commit()
+
+
+def mark_simulated_closed(conn: sqlite3.Connection, ticker: str, reason: str, avg_price: float | None) -> None:
+    """The dry-run bot decided to fully sell, but the real position is untouched.
+    Marks this ticker as closed *in the simulation* so exit rules stop re-firing
+    on it every run - real prices don't reset just because we "sold" on paper.
+    Records avg_price as the baseline to detect a real trade happening later.
+    See reopen_position_state() for when this gets cleared."""
+    set_position_state(conn, ticker, simulated_open=0, close_reason=reason, last_known_avg_price=avg_price,
+                        bull_profit_lock=0, trailing_stop_active=0, trailing_stop_highest_price=None)
+
+
+def reopen_position_state(conn: sqlite3.Connection, ticker: str, avg_price: float | None) -> None:
+    """A real change was detected (position gone, or average price moved - i.e.
+    you actually traded this ticker for real) - treat it as a fresh instance:
+    profit lock and trailing stop reset per TRADING_RULES.md resolved definitions."""
+    set_position_state(conn, ticker, simulated_open=1, close_reason=None, last_known_avg_price=avg_price,
+                        bull_profit_lock=0, trailing_stop_active=0, trailing_stop_highest_price=None)

@@ -2,8 +2,8 @@
 
 An algorithmic trading toolkit for Trading 212 focused on **defensive, rule-based
 trend and momentum trading**. It combines market-regime analysis, technical
-indicators, position sizing, portfolio risk management, and (currently) a
-buy-only dry-run bot — plus the plumbing to pull your live portfolio, screen a
+indicators, position sizing, portfolio risk management, and a full buy+sell
+dry-run bot — plus the plumbing to pull your live portfolio, screen a
 watchlist, and log every (simulated) trade with full indicator context for later
 analysis.
 
@@ -13,9 +13,9 @@ analysis.
 |---|---|
 | Pull live portfolio/cash from Trading212 | ✅ working (`t212_portfolio.py`) |
 | Technical screener over a watchlist | ✅ working (`screener.py`) |
-| Buy-only rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
-| Sell / exit rules | ❌ not implemented — intentionally, per explicit instruction not to automate any selling |
-| Live order execution | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
+| Buy rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
+| Sell / exit rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
+| Live order execution (buy or sell) | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
 | Trade logging with full indicator snapshot | ✅ working (`trade_db.py`, SQLite) |
 | Backtesting | ❌ not built yet |
 
@@ -39,24 +39,23 @@ Quick summary of what's actually implemented today:
 - **Buy Rule 2 — RSI** (€10): RSI14 between 55–65, same trend conditions.
 - **Buy Rule 3 — MACD** (€20): MACD > signal and histogram > 0, same trend
   conditions.
-- **Buy protection**: max €20/stock/day, max €50/portfolio/day, never adds to a
-  losing position, 3-trading-day cooldown per stock, blocks all buying at ≥8%
-  drawdown, cuts buy size 60% at ≥5% drawdown.
+- **Buy protection**: max €20/stock/day, max €50/portfolio/day, max 80%
+  portfolio invested / min 20% cash, never adds to a losing position,
+  3-trading-day cooldown per stock, blocks all buying at ≥8% drawdown, cuts buy
+  size 60% at ≥5% drawdown.
 - **Rule precedence** when multiple rules fire the same stock/day: Rule 1 > Rule
   3 > Rule 2, capped at €20/stock/day total (they don't stack).
+- **Exit rules** (dry-run only, see below): Emergency Stop (-7% → sell 100%, 10
+  trading-day re-entry cooldown), Bull Market Profit (+3% → sell 50%, once per
+  position instance), Breakout Profit (+10% + new 20d high + volume → sell 25%,
+  arms the trailing stop), Trailing Stop (highest price since arming − 2×ATR14).
 - **Known gaps**: no free data source for earnings-date or live bid/ask spread,
   so those two Buy Rule 1 conditions aren't enforced yet — flagged explicitly in
   the bot's own output every run, not silently skipped.
 
-### ⚠️ Open discrepancy — not yet resolved
-
-This repo's original scaffolding (`algo.csv`, `parameters.csv`, and this
-README's earlier draft) specifies **70% max exposure / 30% min cash**. The rules
-given explicitly for `TRADING_RULES.md` specify **80% max exposure / 20% min
-cash**. `trading_bot.py` currently does not enforce either figure directly (it
-gates on per-stock/per-day euro caps and portfolio drawdown, not an aggregate
-exposure %) — but this needs a decision before that check gets added. Pick one
-source of truth and this note goes away.
+Max exposure / min cash is settled: **80% max invested / 20% min cash**,
+consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
+`TRADING_RULES.md`, and enforced in `trading_bot.py`).
 
 ## Project layout
 
@@ -66,7 +65,7 @@ source of truth and this note goes away.
 | `market_data.py` | Free, no-key market data + indicators (SMA/EMA/RSI/MACD/ATR) via Yahoo Finance's public chart endpoint. |
 | `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. |
 | `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic. Not a prediction — a filter. |
-| `trading_bot.py` | Buy-only dry-run engine implementing `TRADING_RULES.md`. No sell logic exists in the file; no order-placement call exists anywhere in the repo. |
+| `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
 | `trade_db.py` | SQLite (`trades.db`, gitignored) schema + helpers: trade log with full indicator snapshot, plus an `equity_snapshots` table for peak/drawdown tracking. |
 | `log_trade.py` | CLI to manually log a real trade you placed yourself in the T212 app, auto-filling indicators + P&L. |
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
@@ -92,16 +91,18 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 ```bash
 .venv/bin/python3 t212_portfolio.py                    # print portfolio summary
 .venv/bin/python3 screener.py                           # technical screener report
-.venv/bin/python3 trading_bot.py                        # dry-run buy-rule evaluation, logs to trades.db
+.venv/bin/python3 trading_bot.py                        # dry-run buy+sell evaluation, logs to trades.db
 .venv/bin/python3 log_trade.py --ticker MSFT_US_EQ --action BUY --price 495.17 --qty 0.02 --reason "Buy Rule 1 - Trend"
 .venv/bin/python3 export_trades.py trades_export.csv     # dump trade log to CSV
 ```
 
 ## Automation
 
-`run_screener.sh` runs the screener daily via a macOS `launchd` job (weekday
-7am), writing to `reports/`. `trading_bot.py` is not yet wired into that
-schedule — it's currently a manual/on-demand dry run.
+`run_screener.sh` runs the screener daily via a macOS `launchd` job
+(`com.t212.screener`, weekday 7am), writing to `reports/`. `run_bot.sh` runs
+`trading_bot.py` the same way (`com.t212.bot`, weekday 7:05am), writing to
+`reports/bot_latest.txt`. Both are dry-run/read-only with respect to real
+trading, so both are safe to run unattended.
 
 Note: launchd-spawned processes are subject to macOS's TCC privacy protections
 for `~/Documents`. If a scheduled job fails with "Operation not permitted",
@@ -113,8 +114,11 @@ grant Full Disk Access to `/bin/bash` in System Settings → Privacy & Security.
   new, clearly-separated function that calls Trading212's order-placement
   endpoint — that hasn't been written, and won't be without an explicit,
   deliberate decision to do so.
-- **No sell logic exists at all**, automated or otherwise, per explicit
-  instruction. Exit rules are specced in `TRADING_RULES.md` but not implemented.
+- **All 4 exit rules are implemented and evaluated every run, but only ever in
+  dry run** — a "sell" is a logged decision, not a real order. See
+  `TRADING_RULES.md` > "Dry-run sell simulation" for how the bot avoids
+  re-firing the same exit forever when the real position never actually
+  changes.
 - Risk-management rules are meant to override trading signals, not the other
   way around. When a required check can't be verified (e.g. earnings date,
   spread), the bot says so in its output rather than assuming it passes.

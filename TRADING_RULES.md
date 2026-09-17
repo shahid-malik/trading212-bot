@@ -4,10 +4,34 @@ Source of truth for the automated strategy. Any bot/screener logic in this proje
 should implement exactly this, not a reinterpretation of it. If a rule changes, edit
 it here first.
 
-Status: **buy-only, dry-run bot exists** (`trading_bot.py`). It evaluates these
-rules and logs what it *would* buy, but places no real orders and never sells.
-Exit rules below are not implemented in code yet — pending explicit instruction
-to build them.
+Status: **full buy + sell dry-run bot exists** (`trading_bot.py`). It evaluates
+every rule below — market filter, all 3 buy rules, all 4 exit rules, the 80/20
+exposure cap, drawdown/daily-loss gates — and logs what it *would* do. It places
+no real orders of either kind; nothing in this repo calls Trading212's
+order-placement endpoint.
+
+### Dry-run sell simulation — how state survives across runs
+
+Because a dry-run "sell" never touches your real Trading212 position, the real
+P&L that triggered an exit rule (e.g. a 7%+ loss) is still there on the next
+run. Without extra bookkeeping the bot would re-fire the same exit forever. To
+avoid that, `trade_db.position_state` tracks, per ticker:
+
+- `simulated_open` — whether the bot considers this position open *in the
+  simulation*. A full-close exit rule (Emergency Stop, Trailing Stop) sets this
+  to 0 and records the real average price at that moment.
+- On a later run, if `simulated_open` is 0, the bot compares today's real
+  average price to the one it recorded at closing time. Unchanged → still the
+  same simulated-closed instance, skip re-evaluating. Changed (or the position
+  reappeared after being gone) → you actually traded this ticker for real,
+  treat it as a fresh instance and resume normal evaluation.
+- `bull_profit_lock` and `trailing_stop_active` reset whenever a position is
+  marked closed (simulated or real), matching the resolved definition that
+  these apply per position instance.
+
+This is bookkeeping for the *simulation's own consistency*, not a claim that it
+tracks a parallel paper portfolio precisely — partial-sell amounts in the report
+are computed off your real, unaffected position size each run.
 
 ## Capital
 
