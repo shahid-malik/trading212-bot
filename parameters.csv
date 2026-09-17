@@ -1,0 +1,47 @@
+RULE 1:
+Maximum total invested capital = 70% of account.
+
+RULE 2:
+Keep at least 30% cash.
+
+RULE 3:
+Maximum initial position in one stock = €50.
+
+RULE 4:
+Maximum total exposure to one stock = €100.
+
+RULE 5:
+Maximum portfolio risk from open positions = 2%.
+
+RULE 6:
+Never add money to a position that is currently losing.
+
+RULE 7:
+All calculations use CLOSED candles only.
+
+RULE 8:
+Do not trade during pre-market or after-hours.
+
+RULE 9:
+Do not buy a stock if earnings are within 3 trading days.
+
+RULE 10:
+Do not trade if bid/ask spread > 0.5%.
+
+RULE 11:
+Do not open a new position if daily portfolio loss >= 1.5%.
+
+RULE 12:
+If portfolio falls 5% from its highest-ever value:
+reduce all new buy amounts by 60%.
+
+RULE 13:
+If portfolio falls 8% from its highest-ever value:
+STOP opening new positions.
+
+RULE 14:
+Resume normal trading only after market conditions return to bullish
+AND portfolio drawdown is below 5%.
+
+RULE 15:
+Never buy the same stock more than once per day.

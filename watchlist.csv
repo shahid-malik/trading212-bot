@@ -1,0 +1,9 @@
+t212_ticker,yahoo_symbol,name,notes
+MSFT_US_EQ,MSFT,Microsoft,
+ORCL_US_EQ,ORCL,Oracle,
+NVDA_US_EQ,NVDA,Nvidia,
+VOW3d_EQ,VOW3.DE,Volkswagen (Preferred),
+GOOGL_US_EQ,GOOGL,Alphabet (Class A),
+VGCX_CA_EQ,,Victoria Gold,TSX listing halted after 2024 Eagle Gold mine incident - no free live data feed found, price in T212 may be stale
+AMD_US_EQ,AMD,Advanced Micro Devices,
+TSLA_US_EQ,TSLA,Tesla,

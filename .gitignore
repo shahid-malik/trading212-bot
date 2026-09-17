@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project-specific (Trading212 bot) ---
+# Never commit credentials or local runtime state.
+credentials.json
+token.json
+trades.db
+reports/

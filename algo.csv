@@ -1,0 +1,912 @@
+STRATEGY NAME:
+Defensive Trend Momentum v1
+
+ACCOUNT:
+Starting capital = €1,000
+
+OBJECTIVE:
+Preserve capital while seeking profitable long trades.
+
+IMPORTANT:
+There is no guaranteed profitable strategy.
+The algorithm must prioritize risk management over trade frequency.
+
+==================================================
+1. MARKET REGIME
+==================================================
+
+Define BULL_MARKET as:
+
+SPY > SMA200
+AND
+SMA50(SPY) > SMA200(SPY)
+
+If BULL_MARKET = FALSE:
+
+    DO NOT OPEN NEW POSITIONS.
+
+Existing positions remain managed by the exit rules.
+
+If SPY is below SMA200:
+    defensive mode = TRUE
+
+If portfolio drawdown >= 8%:
+    trading_disabled = TRUE
+
+
+==================================================
+2. STOCK UNIVERSE
+==================================================
+
+Only consider:
+
+- highly liquid US stocks
+- highly liquid ETFs
+
+Minimum average daily dollar volume:
+    $50 million
+
+Prefer:
+    > $100 million
+
+Do not trade:
+
+- penny stocks
+- extremely volatile stocks
+- stocks with insufficient price history
+- stocks with unknown earnings date
+- stocks with spread > 0.5%
+
+Prefer stocks with:
+
+Price > $20
+
+
+==================================================
+3. MARKET HOURS
+==================================================
+
+Only trade during regular exchange hours.
+
+Never initiate trades:
+
+- pre-market
+- after-hours
+
+Use CLOSED candles for all indicator calculations.
+
+
+==================================================
+4. EARNINGS FILTER
+==================================================
+
+If earnings are scheduled within:
+
+3 trading days
+
+THEN:
+
+    NO NEW BUY.
+
+If earnings date cannot be verified:
+
+    NO NEW BUY.
+
+
+==================================================
+5. PRIMARY TREND FILTER
+==================================================
+
+For every stock calculate:
+
+EMA20
+SMA50
+SMA200
+
+Bullish trend requires:
+
+Price > EMA20
+AND
+Price > SMA50
+AND
+SMA50 > SMA200
+
+If any condition fails:
+
+    NO NEW BUY.
+
+
+==================================================
+6. RSI FILTER
+==================================================
+
+Calculate RSI(14).
+
+Preferred entry zone:
+
+RSI >= 55
+AND
+RSI <= 65
+
+RSI < 50:
+    DO NOT use RSI as a bullish confirmation.
+
+RSI > 70:
+    DO NOT chase the stock.
+
+RSI > 75:
+    NO NEW BUY.
+
+
+==================================================
+7. MACD FILTER
+==================================================
+
+Calculate:
+
+MACD = 12,26
+Signal = 9
+
+Bullish momentum requires:
+
+MACD > Signal
+AND
+MACD Histogram > 0
+
+
+==================================================
+8. VOLUME FILTER
+==================================================
+
+Calculate:
+
+Average Volume = 20-day average volume
+
+Relative Volume =
+Current closed candle volume / Average Volume
+
+For normal entry:
+
+Relative Volume >= 1.0
+
+For breakout entry:
+
+Relative Volume >= 1.5
+
+
+==================================================
+9. VOLATILITY FILTER
+==================================================
+
+Calculate ATR(14).
+
+Reject new trades if:
+
+ATR14 / Price > 5%
+
+This avoids extremely volatile stocks.
+
+
+==================================================
+10. SPREAD FILTER
+==================================================
+
+Normal maximum spread:
+
+0.5%
+
+Preferred:
+
+<= 0.25%
+
+If spread > 0.5%:
+
+    NO TRADE.
+
+
+==================================================
+11. ENTRY SYSTEM
+==================================================
+
+DO NOT allow each indicator to independently trigger a purchase.
+
+Use ENTRY SCORE.
+
+--------------------------------------------------
+TREND SCORE — 40 POINTS
+--------------------------------------------------
+
++15:
+Price > EMA20
+
++10:
+Price > SMA50
+
++15:
+SMA50 > SMA200
+
+
+--------------------------------------------------
+MARKET SCORE — 20 POINTS
+--------------------------------------------------
+
++20:
+SPY > SMA200
+AND
+SPY SMA50 > SMA200
+
+
+--------------------------------------------------
+MOMENTUM SCORE — 20 POINTS
+--------------------------------------------------
+
++10:
+RSI between 55 and 65
+
++10:
+MACD > Signal
+AND
+MACD Histogram > 0
+
+
+--------------------------------------------------
+VOLUME SCORE — 10 POINTS
+--------------------------------------------------
+
++10:
+Relative Volume >= 1.2
+
+
+--------------------------------------------------
+RISK SCORE — 10 POINTS
+--------------------------------------------------
+
++5:
+ATR14 / Price <= 3%
+
++5:
+Spread <= 0.25%
+
+
+TOTAL SCORE = 100
+
+
+==================================================
+12. ENTRY THRESHOLDS
+==================================================
+
+Score < 70:
+
+    NO TRADE.
+
+Score 70-79:
+
+    WATCHLIST ONLY.
+
+Score 80-89:
+
+    VALID ENTRY.
+
+Score 90-100:
+
+    STRONG ENTRY.
+
+However:
+
+If ANY of these fail:
+
+    BULL_MARKET
+    Price > SMA50
+    SMA50 > SMA200
+    portfolio risk limit
+    cash requirement
+    earnings filter
+    spread filter
+
+THEN:
+
+    NO TRADE regardless of score.
+
+
+==================================================
+13. INITIAL BUY
+==================================================
+
+For a valid score >= 80:
+
+Initial purchase:
+
+    €10
+
+Do not immediately add another €10 on the same signal.
+
+
+==================================================
+14. CONFIRMATION BUY
+==================================================
+
+After initial €10 purchase:
+
+Only add another €10 if:
+
+Current position is profitable
+AND
+score >= 80
+AND
+trend remains bullish
+AND
+MACD remains bullish
+AND
+RSI <= 70
+AND
+SPY remains bullish.
+
+Minimum waiting period:
+
+3 trading days
+
+between purchases of the same stock.
+
+
+==================================================
+15. STRONG MOMENTUM BUY
+==================================================
+
+If:
+
+Score >= 90
+AND
+MACD > Signal
+AND
+MACD Histogram > 0
+AND
+RSI 55-65
+AND
+Relative Volume >= 1.2
+AND
+current position is profitable or no position
+
+THEN:
+
+BUY €20.
+
+But:
+
+Maximum new investment in one stock per day = €20.
+
+
+==================================================
+16. MAXIMUM POSITION
+==================================================
+
+Maximum total position:
+
+€100
+
+OR
+
+10% of account equity
+
+whichever is LOWER.
+
+Never exceed this amount.
+
+
+==================================================
+17. NO AVERAGING DOWN
+==================================================
+
+If:
+
+Current Price < Average Entry Price
+
+THEN:
+
+DO NOT BUY MORE.
+
+This rule overrides every buy signal.
+
+
+==================================================
+18. PULLBACK ENTRY
+==================================================
+
+A pullback is allowed only when the long-term trend remains bullish.
+
+Conditions:
+
+Price > SMA50
+AND
+SMA50 > SMA200
+AND
+SPY bullish
+AND
+RSI recovers from 40-55
+AND
+Price closes back above EMA20
+AND
+MACD > Signal
+
+THEN:
+
+BUY €10.
+
+Do not buy while price is still falling.
+
+
+==================================================
+19. BREAKOUT ENTRY
+==================================================
+
+A breakout entry is allowed when:
+
+Price > previous 20-day high
+AND
+Volume >= 1.5 × 20-day average volume
+AND
+Price > SMA50
+AND
+SMA50 > SMA200
+AND
+SPY bullish
+AND
+RSI >= 55
+AND
+RSI <= 70
+AND
+MACD > Signal
+
+THEN:
+
+BUY €20.
+
+Do not chase if:
+
+Price > EMA20 × 1.08
+
+In that case:
+
+WAIT FOR PULLBACK.
+
+
+==================================================
+20. MAXIMUM DAILY PURCHASE
+==================================================
+
+Maximum purchases across entire portfolio per day:
+
+€50
+
+Maximum purchases in one stock per day:
+
+€20
+
+Maximum one buy transaction per stock per day.
+
+
+==================================================
+21. STOP LOSS
+==================================================
+
+Every position must have a defined risk level.
+
+Preferred stop:
+
+Entry Price - 1.5 × ATR14
+
+However:
+
+Never allow a position to exceed the portfolio's permitted risk.
+
+If ATR-based stop would create excessive risk:
+
+REDUCE POSITION SIZE.
+
+Do not widen the stop after entering.
+
+
+==================================================
+22. EMERGENCY STOP
+==================================================
+
+If stock reaches:
+
+-7% from average entry
+
+AND the ATR-based stop has not already triggered:
+
+SELL 100%.
+
+Never average down after an emergency stop.
+
+
+==================================================
+23. PROFIT PROTECTION
+==================================================
+
+When position reaches:
+
++5%
+
+Activate profit protection.
+
+Move stop to:
+
+Entry Price + 0.5 × ATR14
+
+This prevents a profitable position from becoming a large loss.
+
+
+==================================================
+24. FIRST PROFIT TAKE
+==================================================
+
+If:
+
+Position profit >= 3%
+AND
+BULL_MARKET = TRUE
+
+AND
+bull_profit_lock = FALSE
+
+THEN:
+
+SELL 50%.
+
+Set:
+
+bull_profit_lock = TRUE
+
+Do this only once per position.
+
+
+==================================================
+25. BREAKOUT PROFIT TAKE
+==================================================
+
+If:
+
+Position profit >= 10%
+
+AND
+
+Price > previous 20-day high
+
+AND
+
+Volume >= 1.5 × 20-day average volume
+
+THEN:
+
+SELL 25%.
+
+Activate trailing stop.
+
+
+==================================================
+26. TRAILING STOP
+==================================================
+
+After position reaches +10%:
+
+highest_price =
+highest closed price since activation
+
+Trailing Stop:
+
+highest_price - 2 × ATR14
+
+If:
+
+Price <= trailing stop
+
+THEN:
+
+SELL 100% of remaining position.
+
+
+==================================================
+27. TREND EXIT
+==================================================
+
+If:
+
+Price closes below SMA50
+
+AND
+
+MACD < Signal
+
+THEN:
+
+SELL 50%.
+
+If:
+
+Price closes below SMA200
+
+OR
+
+SMA50 < SMA200
+
+THEN:
+
+SELL remaining position.
+
+Do not wait for SPY to recover.
+
+
+==================================================
+28. MARKET REGIME EXIT
+==================================================
+
+If:
+
+SPY closes below SMA200
+AND
+SPY SMA50 < SMA200
+
+THEN:
+
+Defensive mode = TRUE.
+
+No new positions.
+
+For profitable positions:
+
+Tighten trailing stops.
+
+For weak positions:
+
+Exit according to trend-exit rules.
+
+
+==================================================
+29. DAILY LOSS PROTECTION
+==================================================
+
+If portfolio daily loss >= 1.5%:
+
+STOP ALL NEW BUY ORDERS.
+
+Existing positions continue to follow exit rules.
+
+
+==================================================
+30. PORTFOLIO DRAWDOWN
+==================================================
+
+Calculate:
+
+Drawdown =
+(Current Equity - Highest Equity)
+/
+Highest Equity
+
+If drawdown >= 5%:
+
+Reduce all new purchases by 60%.
+
+Example:
+
+Normal €10 buy
+→ €4 actual buy
+
+Normal €20 buy
+→ €8 actual buy
+
+
+If drawdown >= 8%:
+
+STOP ALL NEW BUY ORDERS.
+
+
+==================================================
+31. RECOVERY
+==================================================
+
+After an 8% drawdown shutdown:
+
+Resume trading only when:
+
+SPY > SMA200
+AND
+SPY SMA50 > SMA200
+AND
+portfolio drawdown < 5%.
+
+Do not immediately return to full position sizes.
+
+First 10 trades after recovery:
+
+Use 50% normal position size.
+
+
+==================================================
+32. CONSECUTIVE LOSSES
+==================================================
+
+After 3 consecutive losing trades:
+
+Reduce all new purchases by 50%.
+
+After 5 consecutive losing trades:
+
+STOP NEW TRADES.
+
+Wait until:
+
+SPY bullish
+AND
+at least 5 trading days have passed
+AND
+a score >= 85 setup occurs.
+
+
+==================================================
+33. CASH MANAGEMENT
+==================================================
+
+Maximum invested capital = 70%.
+
+Minimum cash = 30%.
+
+If available cash < 30%:
+
+NO NEW BUY.
+
+If portfolio reaches 70% invested:
+
+NO NEW BUY until exposure falls.
+
+
+==================================================
+34. CORRELATION CONTROL
+==================================================
+
+Do not allow excessive exposure to stocks
+from the same sector or highly correlated stocks.
+
+Maximum exposure to one sector:
+
+25% of account.
+
+If existing positions are highly correlated:
+
+Treat them as one risk group.
+
+Maximum correlated-group exposure:
+
+25%.
+
+
+==================================================
+35. STOCK COOLDOWN
+==================================================
+
+After a stop-loss exit:
+
+Do not trade the same stock for:
+
+10 trading days.
+
+After a normal profit exit:
+
+Wait at least:
+
+3 trading days
+
+before a new position.
+
+
+==================================================
+36. ORDER SAFETY
+==================================================
+
+Before every order verify:
+
+1. Market is open
+2. Spread <= 0.5%
+3. Sufficient cash
+4. Position limit
+5. Portfolio exposure
+6. Portfolio risk
+7. Daily loss
+8. Portfolio drawdown
+9. Earnings date
+10. Existing orders
+11. Stock liquidity
+12. Market regime
+13. Technical score
+
+If any check fails:
+
+DO NOT TRADE.
+
+
+==================================================
+37. ORDER DUPLICATION
+==================================================
+
+Never submit duplicate orders.
+
+Before placing an order:
+
+Check all open/pending orders.
+
+If an equivalent order exists:
+
+DO NOT submit another order.
+
+
+==================================================
+38. TRADE LOGGING
+==================================================
+
+Every decision must be logged.
+
+Record:
+
+timestamp
+ticker
+price
+SPY price
+SPY SMA50
+SPY SMA200
+EMA20
+SMA50
+SMA200
+RSI14
+MACD
+MACD Signal
+MACD Histogram
+ATR14
+volume
+average volume
+relative volume
+spread
+entry score
+portfolio equity
+cash
+invested capital
+position size
+average entry
+unrealized P/L
+realized P/L
+drawdown
+reason for BUY
+reason for SELL
+order size
+order status
+
+
+==================================================
+39. ABSOLUTE PRIORITY
+==================================================
+
+The algorithm must always follow this priority:
+
+1. Capital protection
+2. Portfolio risk
+3. Market regime
+4. Position risk
+5. Trend
+6. Momentum
+7. Volume
+8. Entry opportunity
+
+A BUY signal can NEVER override a risk rule.
+
+A SELL/risk rule can ALWAYS override a BUY signal.
+
+
+==================================================
+40. DEFAULT ACTION
+==================================================
+
+When uncertain:
+
+DO NOTHING.
+
+No trade is better than a low-quality trade.
