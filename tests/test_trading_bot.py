@@ -32,16 +32,20 @@ def make_conn() -> sqlite3.Connection:
 
 
 def full_snap(**overrides) -> dict:
-    """A snapshot where every Buy Rule 1-5 condition is true by default -
+    """A snapshot where every Buy Rule 1-6 condition is true by default -
     override individual fields to make specific conditions fail. Volume is set
     with headroom over tb.VOLUME_CONFIRM_MULT (config-driven, not hardcoded)
-    so Rule 4 clears regardless of the currently configured multiple."""
+    so Rule 4 clears regardless of the currently configured multiple.
+    return_10d=5.0 clears Rule 6 against evaluate_buy()'s default
+    spy_return_10d=0.0 (i.e. "assume a flat market") when a test doesn't pass
+    its own spy_return_10d."""
     avg_volume20 = 800_000
     base = {
         "price": 100.0, "ema20": 95.0, "sma50": 90.0, "sma200": 80.0, "sma20": 98.0,
         "rsi14": 60.0, "macd": 2.0, "macd_signal": 1.0, "macd_histogram": 1.0,
         "volume": avg_volume20 * (tb.VOLUME_CONFIRM_MULT + 0.5),
         "avg_volume20": avg_volume20, "atr14": 2.0, "prev_20d_high": 99.0,
+        "return_10d": 5.0,
     }
     base.update(overrides)
     return base
@@ -60,14 +64,14 @@ class TestEvaluateBuyConfidence(unittest.TestCase):
         self.assertTrue(confidence["fired"])
 
     def test_confidence_below_threshold_does_not_fire(self):
-        # Kill the shared trend conditions (used by Rules 1/2/3/5). Doesn't
-        # hardcode an exact resulting percentage - that number depends on how
-        # many rules exist and their weights, which is exactly what keeps
-        # changing (Rule 4/5 were added after this test was first written).
-        # What must hold regardless: killing most trend signals drops
-        # confidence well below a "clearly not firing" 50%, and below whatever
-        # the threshold currently is.
-        snap = full_snap(ema20=200.0, sma50=200.0, sma200=200.0)  # price 100 < all of these
+        # Kill every technical signal (trend, volume, short-term momentum,
+        # relative strength) - only Rule 1's 2 always-true "not enforced"
+        # conditions survive. Deliberately kills ALL rules rather than just
+        # trend, so this doesn't need updating every time a new rule is added
+        # (that's broken this test twice already - see git history).
+        snap = full_snap(ema20=200.0, sma50=200.0, sma200=200.0,  # kills trend (rules 1/2/3/5)
+                          volume=1.0, avg_volume20=1_000_000,      # kills rule 4
+                          return_10d=-5.0)                          # kills rule 6 (underperforms flat market)
         decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01")
         confidence = decisions[-1]
         self.assertLess(confidence["confidence_pct"], 50.0)
@@ -102,10 +106,10 @@ class TestEvaluateBuyConfidence(unittest.TestCase):
         rule1 = next(d for d in decisions if d["rule"] == "rule1")
         self.assertTrue(rule1["fired"])
 
-    def test_decisions_list_has_five_rule_components_plus_confidence(self):
+    def test_decisions_list_has_six_rule_components_plus_confidence(self):
         decisions = tb.evaluate_buy("TEST", None, full_snap(), True, self.pstate, self.conn, "2026-01-01")
         rules = [d["rule"] for d in decisions]
-        self.assertEqual(rules, ["gates", "rule1", "rule2", "rule3", "rule4", "rule5", "confidence"])
+        self.assertEqual(rules, ["gates", "rule1", "rule2", "rule3", "rule4", "rule5", "rule6", "confidence"])
 
     def test_rule4_volume_confirmation_fires_above_multiple(self):
         avg_vol = 1_000_000
@@ -144,6 +148,32 @@ class TestEvaluateBuyConfidence(unittest.TestCase):
         decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01")
         confidence = decisions[-1]
         self.assertLess(confidence["confidence_pct"], 100.0)
+
+    def test_rule6_relative_strength_fires_when_outperforming_spy(self):
+        snap = full_snap(return_10d=8.0)
+        decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01", spy_return_10d=3.0)
+        rule6 = next(d for d in decisions if d["rule"] == "rule6")
+        self.assertTrue(rule6["fired"])
+
+    def test_rule6_relative_strength_fails_when_underperforming_spy(self):
+        snap = full_snap(return_10d=2.0)
+        decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01", spy_return_10d=5.0)
+        rule6 = next(d for d in decisions if d["rule"] == "rule6")
+        self.assertFalse(rule6["fired"])
+
+    def test_rule6_defaults_to_flat_market_when_spy_return_not_supplied(self):
+        # No spy_return_10d passed - defaults to 0.0 ("assume flat market").
+        # A positive ticker return should still count as outperformance.
+        snap = full_snap(return_10d=1.0)
+        decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01")
+        rule6 = next(d for d in decisions if d["rule"] == "rule6")
+        self.assertTrue(rule6["fired"])
+
+    def test_rule6_fails_gracefully_when_return_10d_missing(self):
+        snap = full_snap(return_10d=None)
+        decisions = tb.evaluate_buy("TEST", None, snap, True, self.pstate, self.conn, "2026-01-01")
+        rule6 = next(d for d in decisions if d["rule"] == "rule6")
+        self.assertFalse(rule6["fired"])
 
     def test_none_indicator_values_fail_safe_not_crash(self):
         snap = full_snap(rsi14=None, macd=None, macd_signal=None, macd_histogram=None, sma200=None)
@@ -272,7 +302,7 @@ class TestLoggedTimestampMatchesRunId(unittest.TestCase):
     def test_log_buy_uses_run_id_not_wall_clock(self):
         historical_run_id = "2022-03-15"  # deliberately not today's real date
         confidence = {"rule": "confidence", "label": "Confidence Buy Rule",
-                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True, "rule4_fired": True, "rule5_fired": True,
+                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True, "rule4_fired": True, "rule5_fired": True, "rule6_fired": True,
                       "confidence_pct": 95.0}
         snap = full_snap()
         trade_id = tb.log_buy(self.conn, "TEST", "TEST", None, snap, confidence, 20.0, True, historical_run_id)
@@ -292,7 +322,7 @@ class TestLoggedTimestampMatchesRunId(unittest.TestCase):
         # cooldown check against a LATER simulated date, must find the
         # cooldown expired once enough trading days have passed.
         confidence = {"rule": "confidence", "label": "Confidence Buy Rule",
-                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True, "rule4_fired": True, "rule5_fired": True,
+                      "rule1_fired": True, "rule2_fired": True, "rule3_fired": True, "rule4_fired": True, "rule5_fired": True, "rule6_fired": True,
                       "confidence_pct": 95.0}
         tb.log_buy(self.conn, "TEST", "TEST", None, full_snap(), confidence, 20.0, True, "2022-01-03")
         pstate = trade_db.get_position_state(self.conn, "TEST")

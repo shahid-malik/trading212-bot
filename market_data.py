@@ -124,6 +124,13 @@ def atr(highs: list[float], lows: list[float], closes: list[float], period: int 
     return sum(true_ranges) / period
 
 
+def n_day_return(closes: list[float], n: int = 10) -> float | None:
+    """% change from n bars ago to the latest close in the slice."""
+    if len(closes) <= n or closes[-1 - n] == 0:
+        return None
+    return (closes[-1] / closes[-1 - n] - 1) * 100
+
+
 def indicators_from_bars(closes: list[float], highs: list[float], lows: list[float], volumes: list[float]) -> dict:
     """Point-in-time indicator computation from a bars slice - the caller decides
     how much history is visible (live code passes everything fetched; backtest.py
@@ -143,6 +150,7 @@ def indicators_from_bars(closes: list[float], highs: list[float], lows: list[flo
         "avg_volume20": sma(volumes, 20),
         "atr14": atr(highs, lows, closes, 14),
         "prev_20d_high": max(highs[-21:-1]) if len(highs) >= 21 else None,
+        "return_10d": n_day_return(closes, 10),
     }
 
 
@@ -159,7 +167,8 @@ def spy_regime_from_closes(closes: list[float]) -> dict:
     s50 = sma(closes, 50)
     s200 = sma(closes, 200)
     bull = bool(s50 and s200 and price > s200 and s50 > s200)
-    return {"bull_market": bull, "spy_price": price, "spy_sma50": s50, "spy_sma200": s200}
+    return {"bull_market": bull, "spy_price": price, "spy_sma50": s50, "spy_sma200": s200,
+            "spy_return_10d": n_day_return(closes, 10)}
 
 
 def spy_regime() -> dict:

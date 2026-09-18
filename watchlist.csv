@@ -12,3 +12,9 @@ AAPL_US_EQ,AAPL,Apple,
 AVGO_US_EQ,AVGO,Broadcom,
 WMT_US_EQ,WMT,Walmart,
 V_US_EQ,V,Visa,
+JNJ_US_EQ,JNJ,Johnson & Johnson,healthcare/pharma - diversification
+LLY_US_EQ,LLY,Eli Lilly,healthcare/pharma - diversification
+JPM_US_EQ,JPM,JPMorgan Chase,banking/financials - diversification
+BRK_B_US_EQ,BRK-B,Berkshire Hathaway (Class B),financials/conglomerate - diversification
+XOM_US_EQ,XOM,ExxonMobil,energy - diversification
+PG_US_EQ,PG,Procter & Gamble,consumer staples - diversification

@@ -220,7 +220,8 @@ def run_backtest(range_: str, capital: float) -> None:
                 continue
 
             remaining_stock_cap = tb.MAX_STOCK_BUY_PER_DAY - trade_db.daily_stock_buy_total(conn, ticker, date)
-            buy_decisions = {d["rule"]: d for d in tb.evaluate_buy(ticker, position, snap, bull_market, pstate, conn, date)}
+            buy_decisions = {d["rule"]: d for d in tb.evaluate_buy(ticker, position, snap, bull_market, pstate, conn, date,
+                                                                     regime.get("spy_return_10d") or 0.0)}
             conf = buy_decisions["confidence"]
             if not conf["fired"]:
                 continue

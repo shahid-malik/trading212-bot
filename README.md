@@ -89,12 +89,12 @@ Quick summary of what's actually implemented today:
 - **Buy decision = weighted confidence score**, not independent rule firing:
   Rule 1 (Trend, weight 40%), Rule 3 (MACD, weight 35%), Rule 2 (RSI, weight
   25%), Rule 4 (Volume Confirmation, weight 15%), Rule 5 (Short-Term Momentum
-  via SMA20, weight 15%) each contribute the fraction of their own conditions
-  that are true; a buy only executes once the combined score clears 90% (both
-  configurable). When it does, it buys a single configurable amount (default
-  €20) — not the old per-rule €10/€10/€20. Each rule's individual
-  fired/not-fired status and the computed confidence % are still recorded on
-  every trade.
+  via SMA20, weight 15%), Rule 6 (Relative Strength vs SPY, weight 15%) each
+  contribute the fraction of their own conditions that are true; a buy only
+  executes once the combined score clears 90% (both configurable). When it
+  does, it buys a single configurable amount (default €20) — not the old
+  per-rule €10/€10/€20. Each rule's individual fired/not-fired status and the
+  computed confidence % are still recorded on every trade.
 - **Buy protection**: max €20/stock/day, max €50/portfolio/day, max 80%
   portfolio invested / min 20% cash, never adds to a losing position,
   3-trading-day cooldown per stock, blocks all buying at ≥8% drawdown, cuts buy
@@ -117,7 +117,7 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 |---|---|
 | `t212_portfolio.py` | Pulls live positions + cash from the Trading212 API (Basic auth: key+secret). |
 | `market_data.py` | Free, no-key market data + indicators (SMA/EMA/RSI/MACD/ATR) via Yahoo Finance's public chart endpoint. |
-| `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. |
+| `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. 19 tickers across tech, healthcare, banking, financials, energy, and consumer staples (2026-09-18: deliberately excludes weapons/defense, adult entertainment, and alcohol/pork producers). |
 | `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic. Not a prediction — a filter. |
 | `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
 | `config.py` / `rules_config.json` | Editable strategy parameters (position caps, drawdown thresholds, buy/exit rule amounts and percentages). `trading_bot.py` reads this at import time; the web UI writes to it. |
@@ -198,11 +198,11 @@ Local only (binds to `127.0.0.1`, not exposed to your network). Five pages:
   (your real dry-run history) and **Backtest** (`backtest.db`, run
   `backtest.py` first) data sources.
 - **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
-  that actually got logged, including which of Rule 1-5 individually fired and
+  that actually got logged, including which of Rule 1-6 individually fired and
   the computed confidence % for every BUY row. Each row also has an "All rules"
   expander showing every named condition evaluated that run - buy eligibility
-  gates, all Rule 1-5 conditions, the confidence check, all 4 exit rules,
-  market regime, and portfolio risk gates (~33 individually-named checks) - not
+  gates, all Rule 1-6 conditions, the confidence check, all 4 exit rules,
+  market regime, and portfolio risk gates (~34 individually-named checks) - not
   just the one that produced this trade. Click a timestamp for the raw
   indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime).
 - **Decisions** — every rule the bot evaluated, every run, fired or not — not

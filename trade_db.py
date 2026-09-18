@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS trades (
     rule3_fired INTEGER,
     rule4_fired INTEGER,
     rule5_fired INTEGER,
+    rule6_fired INTEGER,
     confidence_pct REAL,
     run_id TEXT
 );
@@ -110,6 +111,7 @@ _MIGRATIONS = [
     "ALTER TABLE trades ADD COLUMN rule3_fired INTEGER",
     "ALTER TABLE trades ADD COLUMN rule4_fired INTEGER",
     "ALTER TABLE trades ADD COLUMN rule5_fired INTEGER",
+    "ALTER TABLE trades ADD COLUMN rule6_fired INTEGER",
     "ALTER TABLE trades ADD COLUMN confidence_pct REAL",
     "ALTER TABLE trades ADD COLUMN run_id TEXT",
     "ALTER TABLE decisions ADD COLUMN run_id TEXT",

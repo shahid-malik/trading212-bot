@@ -70,10 +70,10 @@ logged every run, whether it passed or not - not just the ones that failed.
 Each condition has a unique, fully-qualified name (e.g. `Rule 1 - Price >
 EMA20` vs `Rule 3 - Price > EMA20` are logged separately even though they
 check the same thing, because each rule's own condition set is independent).
-This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3/4/5 (5+4+5+1+2,
+This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3/4/5/6 (5+4+5+1+2+1,
 including the 2 unenforced Rule 1 conditions), the Confidence check, Market
 Regime (2), Portfolio Risk Gates (3), and all 4 Exit Rules (1+2+3+4) - around
-33 named checks per ticker per run. All runs from one execution of
+34 named checks per ticker per run. All runs from one execution of
 `trading_bot.py` share a `run_id`, so the web UI's Trades page can show the
 complete breakdown behind any single trade, not just the rule that fired.
 
@@ -141,6 +141,32 @@ whether the upside-oriented tuning is actually better needs validation against
 a different time window and/or a broader, less concentrated watchlist before
 trusting it over the original.
 
+### Update: diversified watchlist + Rules 4-6 (2026-09-18, later same day)
+
+Added 6 non-tech names (Johnson & Johnson, Eli Lilly, JPMorgan Chase, Berkshire
+Hathaway, ExxonMobil, Procter & Gamble - healthcare, banking,
+financials/conglomerate, energy, consumer staples) to a watchlist that was
+previously almost entirely mega-cap tech, and added Rules 4-6 to the
+confidence score. Same 5-year window, same upside-oriented parameter tuning:
+
+| | Tech-only watchlist, 5 rules | Diversified watchlist, 6 rules |
+|---|---|---|
+| Return | +241.8% | +178.8% |
+| Equal-weight buy & hold, same window | +372.8% | +290.8% |
+| Gap to buy & hold | 131 pts | 112 pts |
+| Max drawdown | 27.5% | 24.0% |
+| Win rate | 77% | 63% |
+| Trades | 188 buys | 323 buys |
+
+Both return AND the buy & hold benchmark dropped once diversified - this
+watchlist's outsized buy & hold number was specifically a product of holding
+only the names at the center of the AI-driven mega-cap tech rally; diversifying
+away from that concentration makes the benchmark itself less extreme, which is
+the honest reason the gap looks similar despite lower absolute numbers on both
+sides. Win rate dropped with more trades across more varied sectors - more
+opportunities fired but a smaller fraction converted, consistent with signal
+quality varying by sector rather than the rule engine getting worse.
+
 ## Market Filter
 
 Bull market = TRUE only when **both**:
@@ -161,19 +187,20 @@ each independently trigger their own buy at their own fixed amount. Instead:
    cooldown. If any gate fails, nothing buys regardless of score.
 2. Each rule's own technical conditions (below) are evaluated as components: the
    fraction of that rule's conditions which are true, times that rule's weight.
-3. `confidence % = sum(rule_N_fraction_true × rule_N_weight for N in 1..5) / sum(rule_N_weight for N in 1..5) × 100`
+3. `confidence % = sum(rule_N_fraction_true × rule_N_weight for N in 1..6) / sum(rule_N_weight for N in 1..6) × 100`
 4. A buy executes only when `confidence % >= confidence_threshold_pct` (default
    **90%**), at a single configurable amount (`confidence_buy_amount`, default
    **€20**) — not the old per-rule €10/€10/€20 amounts.
 
 Default weights (editable in the web UI's Rules page / `rules_config.json`):
-Rule 1 = 40%, Rule 3 = 35%, Rule 2 = 25%, Rule 4 = 15%, Rule 5 = 15%. Rules
-1/2/3's weights match the original precedence (Rule 1 > Rule 3 > Rule 2); Rule
-4 (Volume Confirmation) and Rule 5 (Short-Term Momentum) were added 2026-09-18
-using indicator data that was already computed but unused in scoring. Weights
-don't need to sum to exactly 100 — the formula normalizes by the actual total,
-so adding a new rule dilutes the others' relative share without requiring you
-to rebalance existing weights by hand.
+Rule 1 = 40%, Rule 3 = 35%, Rule 2 = 25%, Rule 4 = 15%, Rule 5 = 15%, Rule 6 =
+15%. Rules 1/2/3's weights match the original precedence (Rule 1 > Rule 3 >
+Rule 2); Rules 4-6 (Volume Confirmation, Short-Term Momentum, Relative
+Strength vs SPY) were added 2026-09-18 using indicator data that was already
+computed but unused in scoring. Weights don't need to sum to exactly 100 — the
+formula normalizes by the actual total, so adding a new rule dilutes the
+others' relative share without requiring you to rebalance existing weights by
+hand.
 
 Every trade still records which of Rule 1/2/3's own condition sets were fully
 true (`rule1_fired`/`rule2_fired`/`rule3_fired`) and the computed confidence %,
@@ -209,6 +236,15 @@ nested inside Rule 1's slower SMA50/SMA200 trend check - price already
 above its own 20-day average and that average itself turning up relative to
 the 50-day, catching momentum earlier than the macro trend rules alone would.
 Added 2026-09-18, same rationale as Rule 4.
+
+### Buy Rule 6 — Relative Strength vs SPY (weight: `rule6_weight_pct`, default 15%)
+
+Condition: `ticker's 10-day return > SPY's 10-day return`. A stock trending
+in isolation isn't the same as a stock actually outperforming the broader
+market - this rule specifically rewards market-beating momentum, which the
+other 5 rules (all ticker-only) can't see. Defaults to comparing against a
+flat market (`spy_return_10d=0.0`) if the caller doesn't supply SPY's return
+(e.g. a test calling `evaluate_buy()` in isolation). Added 2026-09-18.
 
 Not enforced in any rule (no free data source, see Known Implementation Gaps):
 `no earnings within 3 trading days`, `spread <= 0.5%`.

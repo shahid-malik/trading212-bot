@@ -127,6 +127,7 @@ def rule_accuracy(conn: sqlite3.Connection) -> list[dict]:
     for rule_key, rule_label in (
         ("rule1_fired", "Rule 1 - Trend"), ("rule2_fired", "Rule 2 - RSI"), ("rule3_fired", "Rule 3 - MACD"),
         ("rule4_fired", "Rule 4 - Volume Confirmation"), ("rule5_fired", "Rule 5 - Short-Term Momentum"),
+        ("rule6_fired", "Rule 6 - Relative Strength vs SPY"),
     ):
         outcomes = []
         for buy in buys:

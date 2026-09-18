@@ -131,6 +131,23 @@ class TestIndicatorsFromBars(unittest.TestCase):
         self.assertNotEqual(snap["prev_20d_high"], 9999.0)
 
 
+class TestNDayReturn(unittest.TestCase):
+    def test_basic_percent_change(self):
+        closes = [100.0] * 10 + [110.0]  # 11 bars, 10 back is index 0 = 100
+        self.assertAlmostEqual(md.n_day_return(closes, 10), 10.0)
+
+    def test_negative_return(self):
+        closes = [100.0] * 5 + [90.0]
+        self.assertAlmostEqual(md.n_day_return(closes, 5), -10.0)
+
+    def test_insufficient_history_returns_none(self):
+        self.assertIsNone(md.n_day_return([100.0, 101.0], 10))
+
+    def test_zero_price_n_days_ago_returns_none_not_crash(self):
+        closes = [0.0] + [100.0] * 10
+        self.assertIsNone(md.n_day_return(closes, 10))
+
+
 class TestSpyRegime(unittest.TestCase):
     def test_bull_when_price_and_sma50_above_sma200(self):
         closes = [100 + i * 0.5 for i in range(250)]  # steady uptrend
@@ -141,6 +158,12 @@ class TestSpyRegime(unittest.TestCase):
         closes = [200 - i * 0.5 for i in range(250)]  # steady downtrend
         regime = md.spy_regime_from_closes(closes)
         self.assertFalse(regime["bull_market"])
+
+    def test_includes_spy_return_10d(self):
+        closes = [100 + i * 0.5 for i in range(250)]
+        regime = md.spy_regime_from_closes(closes)
+        self.assertIsNotNone(regime["spy_return_10d"])
+        self.assertGreater(regime["spy_return_10d"], 0)  # steady uptrend
 
     def test_insufficient_history_is_not_bull(self):
         regime = md.spy_regime_from_closes([100, 101, 102])
