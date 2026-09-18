@@ -109,10 +109,12 @@ def trade_stats(conn: sqlite3.Connection) -> dict:
 
 
 def rule_accuracy(conn: sqlite3.Connection) -> list[dict]:
-    """For each of Rule 1/2/3, among executed BUYs where that rule individually
+    """For each of Rule 1-5, among executed BUYs where that rule individually
     fired, what fraction of that ticker's NEXT sell afterward was profitable?
     Answers "which signal actually predicts a winning trade" - separate from
-    whether the rule contributed to the confidence score that triggered entry."""
+    whether the rule contributed to the confidence score that triggered entry.
+    Older trade rows logged before Rule 4/5 existed have NULL for those
+    columns, which is falsy and simply excluded - no migration needed."""
     conn.row_factory = sqlite3.Row
     buys = conn.execute(
         "SELECT * FROM trades WHERE action='BUY' AND order_result='DRY_RUN' ORDER BY timestamp"
@@ -122,7 +124,10 @@ def rule_accuracy(conn: sqlite3.Connection) -> list[dict]:
     ).fetchall()
 
     results = []
-    for rule_key, rule_label in (("rule1_fired", "Rule 1 - Trend"), ("rule2_fired", "Rule 2 - RSI"), ("rule3_fired", "Rule 3 - MACD")):
+    for rule_key, rule_label in (
+        ("rule1_fired", "Rule 1 - Trend"), ("rule2_fired", "Rule 2 - RSI"), ("rule3_fired", "Rule 3 - MACD"),
+        ("rule4_fired", "Rule 4 - Volume Confirmation"), ("rule5_fired", "Rule 5 - Short-Term Momentum"),
+    ):
         outcomes = []
         for buy in buys:
             if not buy[rule_key]:

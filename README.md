@@ -88,11 +88,13 @@ Quick summary of what's actually implemented today:
   regime). No exceptions.
 - **Buy decision = weighted confidence score**, not independent rule firing:
   Rule 1 (Trend, weight 40%), Rule 3 (MACD, weight 35%), Rule 2 (RSI, weight
-  25%) each contribute the fraction of their own conditions that are true; a
-  buy only executes once the combined score clears 90% (both configurable).
-  When it does, it buys a single configurable amount (default €20) — not the
-  old per-rule €10/€10/€20. Each rule's individual fired/not-fired status and
-  the computed confidence % are still recorded on every trade.
+  25%), Rule 4 (Volume Confirmation, weight 15%), Rule 5 (Short-Term Momentum
+  via SMA20, weight 15%) each contribute the fraction of their own conditions
+  that are true; a buy only executes once the combined score clears 90% (both
+  configurable). When it does, it buys a single configurable amount (default
+  €20) — not the old per-rule €10/€10/€20. Each rule's individual
+  fired/not-fired status and the computed confidence % are still recorded on
+  every trade.
 - **Buy protection**: max €20/stock/day, max €50/portfolio/day, max 80%
   portfolio invested / min 20% cash, never adds to a losing position,
   3-trading-day cooldown per stock, blocks all buying at ≥8% drawdown, cuts buy
@@ -196,11 +198,11 @@ Local only (binds to `127.0.0.1`, not exposed to your network). Five pages:
   (your real dry-run history) and **Backtest** (`backtest.db`, run
   `backtest.py` first) data sources.
 - **Trades** — filterable table (ticker / BUY-SELL / dry-run vs real) of trades
-  that actually got logged, including which of Rule 1/2/3 individually fired and
+  that actually got logged, including which of Rule 1-5 individually fired and
   the computed confidence % for every BUY row. Each row also has an "All rules"
   expander showing every named condition evaluated that run - buy eligibility
-  gates, all Rule 1/2/3 conditions, the confidence check, all 4 exit rules,
-  market regime, and portfolio risk gates (~30 individually-named checks) - not
+  gates, all Rule 1-5 conditions, the confidence check, all 4 exit rules,
+  market regime, and portfolio risk gates (~33 individually-named checks) - not
   just the one that produced this trade. Click a timestamp for the raw
   indicator snapshot (SMA/EMA/RSI/MACD/ATR/volume/SPY regime).
 - **Decisions** — every rule the bot evaluated, every run, fired or not — not

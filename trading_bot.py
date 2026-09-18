@@ -56,6 +56,9 @@ BUY_COOLDOWN_TRADING_DAYS = int(CFG["buy_cooldown_trading_days"])
 RULE1_WEIGHT_PCT = CFG["rule1_weight_pct"]
 RULE2_WEIGHT_PCT = CFG["rule2_weight_pct"]
 RULE3_WEIGHT_PCT = CFG["rule3_weight_pct"]
+RULE4_WEIGHT_PCT = CFG["rule4_weight_pct"]
+RULE5_WEIGHT_PCT = CFG["rule5_weight_pct"]
+VOLUME_CONFIRM_MULT = CFG["volume_confirm_mult"]
 CONFIDENCE_THRESHOLD_PCT = CFG["confidence_threshold_pct"]
 CONFIDENCE_BUY_AMOUNT = CFG["confidence_buy_amount"]
 RSI_BUY_MIN = CFG["rsi_buy_min"]
@@ -256,20 +259,36 @@ def evaluate_buy(ticker: str, position: dict | None, snap: dict, bull_market: bo
         ("Rule 3 - SMA50 > SMA200", sma50_above_sma200),
     ])
 
+    volume_confirmed = (snap["volume"] is not None and snap["avg_volume20"] is not None
+                         and snap["volume"] > VOLUME_CONFIRM_MULT * snap["avg_volume20"])
+    rule4 = _rule_result("rule4", "Buy Rule 4 - Volume Confirmation", [
+        (f"Rule 4 - Volume > {VOLUME_CONFIRM_MULT:g}x 20d Average", volume_confirmed),
+    ])
+
+    price_above_sma20 = snap["sma20"] is not None and price > snap["sma20"]
+    sma20_above_sma50 = snap["sma20"] is not None and snap["sma50"] is not None and snap["sma20"] > snap["sma50"]
+    rule5 = _rule_result("rule5", "Buy Rule 5 - Short-Term Momentum", [
+        ("Rule 5 - Price > SMA20", price_above_sma20),
+        ("Rule 5 - SMA20 > SMA50", sma20_above_sma50),
+    ])
+
     # Only the trend/momentum conditions feed the weighted score - eligibility
     # gates are a separate hard pass/fail, not part of the 0-100% gradient.
-    total_weight = RULE1_WEIGHT_PCT + RULE2_WEIGHT_PCT + RULE3_WEIGHT_PCT
-    weighted = (rule1["fraction"] * RULE1_WEIGHT_PCT) + (rule2["fraction"] * RULE2_WEIGHT_PCT) + (rule3["fraction"] * RULE3_WEIGHT_PCT)
+    total_weight = RULE1_WEIGHT_PCT + RULE2_WEIGHT_PCT + RULE3_WEIGHT_PCT + RULE4_WEIGHT_PCT + RULE5_WEIGHT_PCT
+    weighted = (rule1["fraction"] * RULE1_WEIGHT_PCT) + (rule2["fraction"] * RULE2_WEIGHT_PCT) \
+        + (rule3["fraction"] * RULE3_WEIGHT_PCT) + (rule4["fraction"] * RULE4_WEIGHT_PCT) \
+        + (rule5["fraction"] * RULE5_WEIGHT_PCT)
     confidence_pct = (weighted / total_weight * 100) if total_weight else 0.0
 
     confidence = _rule_result("confidence", "Confidence Buy Rule",
                                [("Confidence - Score >= Threshold", confidence_pct >= CONFIDENCE_THRESHOLD_PCT)],
                                base_amount=CONFIDENCE_BUY_AMOUNT, confidence_pct=confidence_pct,
-                               rule1_fired=rule1["fired"], rule2_fired=rule2["fired"], rule3_fired=rule3["fired"])
+                               rule1_fired=rule1["fired"], rule2_fired=rule2["fired"], rule3_fired=rule3["fired"],
+                               rule4_fired=rule4["fired"], rule5_fired=rule5["fired"])
     confidence["fired"] = confidence["fired"] and gates["fired"]
     confidence["blocks"] = gates["blocks"] + confidence["blocks"]
 
-    return [gates, rule1, rule2, rule3, confidence]
+    return [gates, rule1, rule2, rule3, rule4, rule5, confidence]
 
 
 def log_sell(conn, ticker: str, symbol: str, position: dict, snap: dict, d: dict,
@@ -313,6 +332,7 @@ def log_buy(conn, ticker: str, symbol: str, position: dict | None, snap: dict, d
         avg_volume20=snap["avg_volume20"], atr14=snap["atr14"], spread_pct=None,
         reason=d["label"], order_result="DRY_RUN", dry_run=1, run_id=run_id,
         rule1_fired=int(d["rule1_fired"]), rule2_fired=int(d["rule2_fired"]), rule3_fired=int(d["rule3_fired"]),
+        rule4_fired=int(d["rule4_fired"]), rule5_fired=int(d["rule5_fired"]),
         confidence_pct=d["confidence_pct"],
     )
 
@@ -519,7 +539,7 @@ def main() -> None:
         # Rule 1/2/3 no longer trigger independent buys - each is just a
         # component of the weighted confidence score below. Still logged for
         # visibility (see TRADING_RULES.md > Buy Rules - Confidence Scoring Model).
-        for rule_key in ("rule1", "rule2", "rule3"):
+        for rule_key in ("rule1", "rule2", "rule3", "rule4", "rule5"):
             comp = buy_decisions[rule_key]
             lines.append(f"    {comp['label']}: {'yes' if comp['fired'] else 'no'}"
                          + (f" ({'; '.join(comp['blocks'])})" if comp["blocks"] else ""))

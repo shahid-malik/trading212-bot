@@ -70,12 +70,12 @@ logged every run, whether it passed or not - not just the ones that failed.
 Each condition has a unique, fully-qualified name (e.g. `Rule 1 - Price >
 EMA20` vs `Rule 3 - Price > EMA20` are logged separately even though they
 check the same thing, because each rule's own condition set is independent).
-This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3 (5+4+5, including the
-2 unenforced Rule 1 conditions), the Confidence check, Market Regime (2),
-Portfolio Risk Gates (3), and all 4 Exit Rules (1+2+3+4) - around 30 named
-checks per ticker per run. All runs from one execution of `trading_bot.py`
-share a `run_id`, so the web UI's Trades page can show the complete breakdown
-behind any single trade, not just the rule that fired.
+This covers: Buy Eligibility Gates (5), Buy Rule 1/2/3/4/5 (5+4+5+1+2,
+including the 2 unenforced Rule 1 conditions), the Confidence check, Market
+Regime (2), Portfolio Risk Gates (3), and all 4 Exit Rules (1+2+3+4) - around
+33 named checks per ticker per run. All runs from one execution of
+`trading_bot.py` share a `run_id`, so the web UI's Trades page can show the
+complete breakdown behind any single trade, not just the rule that fired.
 
 ## Capital
 
@@ -161,14 +161,19 @@ each independently trigger their own buy at their own fixed amount. Instead:
    cooldown. If any gate fails, nothing buys regardless of score.
 2. Each rule's own technical conditions (below) are evaluated as components: the
    fraction of that rule's conditions which are true, times that rule's weight.
-3. `confidence % = (rule1_fraction_true × rule1_weight + rule2_fraction_true × rule2_weight + rule3_fraction_true × rule3_weight) / (rule1_weight + rule2_weight + rule3_weight) × 100`
+3. `confidence % = sum(rule_N_fraction_true × rule_N_weight for N in 1..5) / sum(rule_N_weight for N in 1..5) × 100`
 4. A buy executes only when `confidence % >= confidence_threshold_pct` (default
    **90%**), at a single configurable amount (`confidence_buy_amount`, default
    **€20**) — not the old per-rule €10/€10/€20 amounts.
 
 Default weights (editable in the web UI's Rules page / `rules_config.json`):
-Rule 1 = 40%, Rule 3 = 35%, Rule 2 = 25% — matching the original precedence
-(Rule 1 > Rule 3 > Rule 2).
+Rule 1 = 40%, Rule 3 = 35%, Rule 2 = 25%, Rule 4 = 15%, Rule 5 = 15%. Rules
+1/2/3's weights match the original precedence (Rule 1 > Rule 3 > Rule 2); Rule
+4 (Volume Confirmation) and Rule 5 (Short-Term Momentum) were added 2026-09-18
+using indicator data that was already computed but unused in scoring. Weights
+don't need to sum to exactly 100 — the formula normalizes by the actual total,
+so adding a new rule dilutes the others' relative share without requiring you
+to rebalance existing weights by hand.
 
 Every trade still records which of Rule 1/2/3's own condition sets were fully
 true (`rule1_fired`/`rule2_fired`/`rule3_fired`) and the computed confidence %,
@@ -188,6 +193,22 @@ Conditions: `RSI14 >= 55 AND RSI14 <= 65`, `Price > EMA20`, `Price > SMA50`,
 
 Conditions: `MACD > Signal`, `MACD Histogram > 0`, `Price > EMA20`,
 `Price > SMA50`, `SMA50 > SMA200`.
+
+### Buy Rule 4 — Volume Confirmation (weight: `rule4_weight_pct`, default 15%)
+
+Condition: `Volume > volume_confirm_mult x 20-day average volume` (default
+multiple 1.3). A single-condition rule: today's move is backed by real
+trading activity, not thin-volume noise. Added 2026-09-18 - volume/avg_volume20
+were already computed for every ticker but weren't used in the confidence
+score before this.
+
+### Buy Rule 5 — Short-Term Momentum (weight: `rule5_weight_pct`, default 15%)
+
+Conditions: `Price > SMA20`, `SMA20 > SMA50`. A faster-moving confirmation
+nested inside Rule 1's slower SMA50/SMA200 trend check - price already
+above its own 20-day average and that average itself turning up relative to
+the 50-day, catching momentum earlier than the macro trend rules alone would.
+Added 2026-09-18, same rationale as Rule 4.
 
 Not enforced in any rule (no free data source, see Known Implementation Gaps):
 `no earnings within 3 trading days`, `spread <= 0.5%`.

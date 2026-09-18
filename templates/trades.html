@@ -41,7 +41,7 @@ run, not just the one that produced this trade.</p>
     <tr>
       <th>Timestamp</th><th>Ticker</th><th>Action</th><th>Type</th>
       <th>Order EUR</th><th>Price</th><th>Avg price</th><th>P/L %</th><th>Reason</th>
-      <th>Rule 1</th><th>Rule 2</th><th>Rule 3</th><th>Confidence</th><th>All rules</th>
+      <th>Rule 1</th><th>Rule 2</th><th>Rule 3</th><th>Rule 4</th><th>Rule 5</th><th>Confidence</th><th>All rules</th>
     </tr>
   </thead>
   <tbody>
@@ -59,6 +59,8 @@ run, not just the one that produced this trade.</p>
       <td>{% if r['rule1_fired'] is not none %}<span class="badge {% if r['rule1_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule1_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule2_fired'] is not none %}<span class="badge {% if r['rule2_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule2_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule3_fired'] is not none %}<span class="badge {% if r['rule3_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule3_fired'] else 'no' }}</span>{% endif %}</td>
+      <td>{% if r['rule4_fired'] is not none %}<span class="badge {% if r['rule4_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule4_fired'] else 'no' }}</span>{% endif %}</td>
+      <td>{% if r['rule5_fired'] is not none %}<span class="badge {% if r['rule5_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule5_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{{ "%.1f%%"|format(r['confidence_pct']) if r['confidence_pct'] is not none else "" }}</td>
       <td>
         {% set rules = all_rules.get(r['id'], []) %}
@@ -88,7 +90,7 @@ run, not just the one that produced this trade.</p>
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="14" class="muted">No trades logged yet.</td></tr>
+    <tr><td colspan="16" class="muted">No trades logged yet.</td></tr>
     {% endfor %}
   </tbody>
 </table>
