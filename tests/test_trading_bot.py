@@ -2,6 +2,14 @@
 priority ordering, and cooldown day-counting. Uses an isolated in-memory
 trade_db connection per test so nothing touches the real trades.db.
 
+IMPORTANT: trading_bot.py's thresholds (EMERGENCY_STOP_LOSS_PCT, BULL_PROFIT_PCT,
+TRAILING_STOP_ATR_MULT, etc.) are read from rules_config.json at import time -
+the same file the web UI's Rules page writes to. Never hardcode a specific
+percentage/price in a test; always compute the test's inputs FROM tb.<CONSTANT>
+so the test still exercises the intended edge case no matter what value is
+currently configured. This has broken three tests so far when config values
+changed via the UI mid-session - see git history.
+
 Run: .venv/bin/python3 -m unittest discover -s tests -t .
 """
 
@@ -159,10 +167,17 @@ class TestEvaluateExitPriority(unittest.TestCase):
         self.assertIn(("Exit 4 - Trailing Stop Armed", False), exit4["conditions"])
 
     def test_trailing_stop_triggers_when_price_drops_below_level(self):
-        # Armed at a highest price of 120, ATR14=2 -> trailing level = 120 - 2*2 = 116.
-        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": 115.0, "ppl": 15.0}
-        snap = full_snap(price=115.0, atr14=2.0)
-        armed = self._pstate(trailing_stop_active=1, trailing_stop_highest_price=120.0)
+        # Construct highest_price so trailing_level = current_price + 5,
+        # guaranteeing a trigger regardless of the configured ATR multiple.
+        # profit_pct is kept tiny so bull-profit/breakout thresholds (also
+        # config-driven, could be as low as a few percent) can't fire first
+        # and change which rule ends up last in the returned list.
+        current_price = 100.5
+        atr14 = 1.0
+        highest = current_price + tb.TRAILING_STOP_ATR_MULT * atr14 + 5
+        position = {"quantity": 1.0, "averagePrice": 100.0, "currentPrice": current_price, "ppl": 0.5}
+        snap = full_snap(price=current_price, atr14=atr14)
+        armed = self._pstate(trailing_stop_active=1, trailing_stop_highest_price=highest)
         decisions = tb.evaluate_exit(position, snap, armed, True)
         exit4 = decisions[-1]  # emergency(no)+trailing(fires) -> loop returns after exit4 fires
         self.assertEqual(exit4["rule"], "exit4")

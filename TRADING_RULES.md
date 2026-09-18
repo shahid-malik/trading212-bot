@@ -83,6 +83,14 @@ behind any single trade, not just the rule that fired.
 
 ## Risk Limits
 
+These are the original design baseline. **Live values are in `rules_config.json`
+/ the web UI's Rules page**, which has since been tuned away from several of
+these (position caps, exposure %, profit-taking thresholds) — see "Upside vs.
+Defense Tradeoff" below. Keeping every number in this table perfectly in sync
+with live tuning isn't sustainable (it's drifted before); treat this table as
+"what the strategy was designed around," and `rules_config.json` as ground
+truth for "what it's actually running with right now."
+
 | Limit | Value |
 |---|---|
 | Leverage | Never |
@@ -97,6 +105,41 @@ behind any single trade, not just the rule that fired.
 | Daily portfolio loss limit | 1.5% |
 | Drawdown >=5% from peak | Reduce new buy amounts by 60% (superseded from an earlier 50% figure — see [Resolved Definitions](#resolved-definitions)) |
 | Drawdown >=8% from peak | Stop all new buying (new and existing positions) |
+
+## Upside vs. Defense Tradeoff (2026-09-18)
+
+A 5-year backtest against the current watchlist (mega-cap tech: NVDA, TSLA,
+AMD, AAPL, MSFT, GOOGL, AMZN, and others) during one of the strongest bull
+runs in market history produced:
+
+| | Original defensive tuning | Upside-oriented tuning |
+|---|---|---|
+| Return | +149.2% | +266.3% |
+| Equal-weight buy & hold, same window | +383.2% | +372.8% |
+| Gap to buy & hold | 234 pts | 107 pts |
+| Max drawdown | 21.9% | 28.8% |
+| Win rate | 80% | 67% |
+
+The upside-oriented tuning raised `max_invested_pct` (less cash drag), raised
+`bull_profit_pct`/`breakout_profit_pct` and lowered their sell fractions (let
+winners run further before trimming), widened `trailing_stop_atr_mult` (less
+premature stop-out on normal volatility), shortened `buy_cooldown_trading_days`,
+and raised the position/daily caps and `confidence_buy_amount` (bigger
+deployment per signal).
+
+**This did not close the gap, and design-wise, it can't fully close on this
+specific window.** The strategy holds a cash reserve and trims winners
+specifically *because* those are risk controls, not because of an oversight -
+loosening them enough to fully match buy-and-hold during a historic
+concentrated-tech rally would mean removing the exact things that make this a
+"defensive" strategy rather than "hold everything and hope." A defensive
+system lagging a raw buy-and-hold through an exceptional bull run in the exact
+names it holds is the expected, honest tradeoff - not a bug to keep chasing
+with more parameter tuning. Repeated tuning against one fixed historical
+window also risks curve-fitting to that window specifically; a real test of
+whether the upside-oriented tuning is actually better needs validation against
+a different time window and/or a broader, less concentrated watchlist before
+trusting it over the original.
 
 ## Market Filter
 
