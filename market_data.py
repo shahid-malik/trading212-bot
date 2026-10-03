@@ -7,8 +7,11 @@ production-grade or high-frequency.
 
 from __future__ import annotations
 
+import datetime as dt
+import http.cookiejar
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -56,6 +59,94 @@ def fetch_daily_bars(symbol: str, range_: str = "6mo") -> dict:
         raise MarketDataError(f"{symbol}: only {len(bars['close'])} usable bars, need >=30")
 
     return bars
+
+
+# quoteSummary (earnings dates) needs a session cookie + "crumb" token, unlike the
+# chart endpoint. Fetched lazily once per process and reused for every ticker.
+_cookie_opener: urllib.request.OpenerDirector | None = None
+_crumb: str | None = None
+
+
+def _yahoo_session() -> tuple[urllib.request.OpenerDirector, str]:
+    global _cookie_opener, _crumb
+    if _cookie_opener is not None and _crumb:
+        return _cookie_opener, _crumb
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.addheaders = list(_HEADERS.items())
+    try:
+        # fc.yahoo.com answers 404 but sets the session cookie, which is all we need.
+        opener.open("https://fc.yahoo.com", timeout=20)
+    except urllib.error.HTTPError:
+        pass
+    except urllib.error.URLError as e:
+        raise MarketDataError(f"earnings: cookie fetch failed: {e.reason}") from e
+    try:
+        with opener.open("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=20) as resp:
+            crumb = resp.read().decode().strip()
+    except urllib.error.HTTPError as e:
+        raise MarketDataError(f"earnings: crumb fetch HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise MarketDataError(f"earnings: crumb fetch failed: {e.reason}") from e
+    if not crumb or "<" in crumb:
+        raise MarketDataError("earnings: Yahoo returned no usable crumb")
+    _cookie_opener, _crumb = opener, crumb
+    return opener, crumb
+
+
+def fetch_next_earnings(symbol: str, today: dt.date | None = None) -> dict | None:
+    """Next scheduled earnings date from Yahoo's calendarEvents module.
+
+    Returns {"date": date, "estimated": bool} or None if Yahoo lists no upcoming
+    date (common for ETFs). "estimated" is True when Yahoo marks the date as an
+    estimate or only gives a date range (the earliest day of the range is used,
+    which is the conservative choice for a "no buy before earnings" filter).
+    Raises MarketDataError when the date can't be fetched at all - callers must
+    treat that as "unverified", never as "no earnings soon".
+    """
+    today = today or dt.date.today()
+    opener, crumb = _yahoo_session()
+    url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{urllib.parse.quote(symbol)}"
+           f"?modules=calendarEvents&crumb={urllib.parse.quote(crumb)}")
+    try:
+        with opener.open(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise MarketDataError(f"{symbol}: earnings HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise MarketDataError(f"{symbol}: earnings fetch failed: {e.reason}") from e
+
+    result = (data.get("quoteSummary") or {}).get("result")
+    if not result:
+        err = (data.get("quoteSummary") or {}).get("error") or {}
+        raise MarketDataError(f"{symbol}: earnings {err.get('description', 'no data returned')}")
+
+    earnings = (result[0].get("calendarEvents") or {}).get("earnings") or {}
+    dates = sorted(
+        dt.datetime.fromtimestamp(d["raw"], tz=dt.timezone.utc).date()
+        for d in earnings.get("earningsDate") or []
+        if isinstance(d, dict) and d.get("raw")
+    )
+    upcoming = [d for d in dates if d >= today]
+    if not upcoming:
+        return None
+    return {
+        "date": upcoming[0],
+        "estimated": bool(earnings.get("isEarningsDateEstimate")) or len(upcoming) > 1,
+    }
+
+
+def trading_days_until(target: dt.date, today: dt.date | None = None) -> int:
+    """Weekdays from today (exclusive) to target (inclusive); 0 means today.
+    Ignores market holidays, same approximation as the bot's cooldowns."""
+    today = today or dt.date.today()
+    if target <= today:
+        return 0
+    days, d = 0, today
+    while d < target:
+        d += dt.timedelta(days=1)
+        if d.weekday() < 5:
+            days += 1
+    return days
 
 
 def sma(values: list[float], window: int) -> float | None:

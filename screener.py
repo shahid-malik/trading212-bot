@@ -6,6 +6,11 @@ reliably say a stock "will go up next week." The score combines a trend componen
 (is it in a confirmed uptrend) and a mean-reversion component (is it oversold and
 starting to bounce). Treat a high score as "worth a second look," not as advice.
 
+Each ticker also gets its next earnings date. Per TRADING_RULES.md there is no new
+buy within 3 trading days of earnings, so tickers inside that window are dropped from
+the candidate list (they're still scored and shown). If the date can't be fetched the
+ticker is marked "earnings unverified" - check it manually before buying.
+
 Reads tickers from watchlist.csv (seeded from your Trading212 holdings, edit that
 file to add more candidates - only yahoo_symbol is required, t212_ticker/name/notes
 are optional).
@@ -14,6 +19,7 @@ Usage:
   python3 screener.py                 # print a report
   python3 screener.py --email out.txt # also write an email-ready summary to a file
   python3 screener.py --min-score 50  # change the "candidate" threshold (default 60)
+  python3 screener.py --earnings-days 5  # widen the pre-earnings blackout (default 3)
 """
 
 from __future__ import annotations
@@ -76,6 +82,31 @@ def reversion_score(bars: dict) -> tuple[int, list[str]]:
     return score, notes
 
 
+def earnings_info(symbol: str) -> dict:
+    """{"date", "estimated", "trading_days", "error"} - error set when unverified."""
+    try:
+        nxt = market_data.fetch_next_earnings(symbol)
+    except market_data.MarketDataError as e:
+        return {"date": None, "estimated": False, "trading_days": None, "error": str(e)}
+    if nxt is None:
+        return {"date": None, "estimated": False, "trading_days": None, "error": None}
+    return {**nxt, "trading_days": market_data.trading_days_until(nxt["date"]), "error": None}
+
+
+def earnings_text(e: dict) -> str:
+    if e["error"]:
+        return "earnings: UNVERIFIED (could not fetch date)"
+    if e["date"] is None:
+        return "earnings: none scheduled"
+    est = ", estimated" if e["estimated"] else ""
+    n = e["trading_days"]
+    return f"earnings: {e['date'].isoformat()} (in {n} trading day{'' if n == 1 else 's'}{est})"
+
+
+def in_blackout(e: dict, window: int) -> bool:
+    return e["trading_days"] is not None and e["trading_days"] <= window
+
+
 def analyze(symbol: str) -> dict:
     bars = market_data.fetch_daily_bars(symbol)
     t_score, t_notes = trend_score(bars)
@@ -89,6 +120,7 @@ def analyze(symbol: str) -> dict:
         "chg_pct": (price / prev - 1) * 100,
         "score": total,
         "notes": t_notes + r_notes,
+        "earnings": earnings_info(symbol),
     }
 
 
@@ -100,7 +132,7 @@ def label(score: int) -> str:
     return "no signal"
 
 
-def build_report(min_score: int = 60) -> str:
+def build_report(min_score: int = 60, earnings_days: int = 3) -> str:
     watchlist = load_watchlist(HERE / "watchlist.csv")
 
     results, skipped = [], []
@@ -121,10 +153,14 @@ def build_report(min_score: int = 60) -> str:
     lines = []
     lines.append(f"Trading212 daily screener - {time.strftime('%Y-%m-%d')}")
     lines.append("Rule-based technical heuristic only. Not a prediction, not financial advice.")
+    lines.append(f"Earnings blackout: no new buy within {earnings_days} trading days of earnings.")
     lines.append("")
     for r in results:
+        e = r["earnings"]
+        flag = "  <-- EARNINGS BLACKOUT" if in_blackout(e, earnings_days) else ""
         lines.append(f"{r['symbol']:<10} score={r['score']:<3} {label(r['score']):<17} "
                       f"price={r['price']:.2f} ({r['chg_pct']:+.1f}% today)")
+        lines.append(f"    {earnings_text(e)}{flag}")
         for n in r["notes"]:
             lines.append(f"    - {n}")
     if skipped:
@@ -133,13 +169,23 @@ def build_report(min_score: int = 60) -> str:
         for ticker, reason in skipped:
             lines.append(f"  {ticker}: {reason}")
 
-    candidates = [r for r in results if r["score"] >= min_score]
+    scored = [r for r in results if r["score"] >= min_score]
+    candidates = [r for r in scored if not in_blackout(r["earnings"], earnings_days)]
+    blacked_out = [r for r in scored if in_blackout(r["earnings"], earnings_days)]
     lines.append("")
     if candidates:
         lines.append(f"{len(candidates)} candidate(s) at/above score {min_score}: "
-                      + ", ".join(f"{r['symbol']} ({r['score']})" for r in candidates))
+                      + ", ".join(f"{r['symbol']} ({r['score']})"
+                                  + (" [earnings unverified]" if r["earnings"]["error"] else "")
+                                  for r in candidates))
     else:
         lines.append(f"No candidates at/above score {min_score} today.")
+    if blacked_out:
+        lines.append(f"Excluded (earnings within {earnings_days} trading days): "
+                      + ", ".join(f"{r['symbol']} ({r['earnings']['date'].isoformat()})" for r in blacked_out))
+    unverified = [r["symbol"] for r in results if r["earnings"]["error"]]
+    if unverified:
+        lines.append("Earnings date unverified (check manually before buying): " + ", ".join(unverified))
 
     return "\n".join(lines)
 
@@ -148,9 +194,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--email", metavar="FILE", help="Write an email-ready summary to FILE")
     parser.add_argument("--min-score", type=int, default=60, help="Score threshold to call something a candidate (default 60)")
+    parser.add_argument("--earnings-days", type=int, default=3,
+                        help="Exclude candidates with earnings within this many trading days (default 3)")
     args = parser.parse_args()
 
-    report = build_report(args.min_score)
+    report = build_report(args.min_score, args.earnings_days)
     print(report)
 
     if args.email:

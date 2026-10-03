@@ -34,6 +34,12 @@ analysis.
 - **57 automated tests** (`tests/`, stdlib `unittest`, no network/DB
   dependency): indicator math edge cases, confidence-score weighting,
   exit-rule priority ordering, and KPI calculations on known inputs.
+- **Earnings-date metric in the screener.** Every ticker's report now shows its
+  next earnings date and how many trading days away it is, fetched from Yahoo
+  Finance's `calendarEvents` data. Tickers with earnings within 3 trading days
+  (`--earnings-days N` to change) are left out of the candidate list, per the
+  "no new buy before earnings" rule. Tickers whose date can't be fetched are
+  marked **UNVERIFIED** rather than assumed safe. See [Earnings dates](#earnings-dates).
 
 ### v1.0 (2026-09-18)
 
@@ -50,8 +56,9 @@ analysis.
 - **No live order placement anywhere in the codebase** — this release is
   dry-run only, by design.
 
-Known limitations: earnings-date and bid/ask-spread filters aren't enforced
-(no free data source, flagged explicitly every run); trading-day cooldowns
+Known limitations: the bid/ask-spread filter isn't enforced (no free data
+source, flagged explicitly every run); the earnings-date filter is applied in
+the screener (see Unreleased) but not yet in `trading_bot.py`; trading-day cooldowns
 approximate calendar weekdays; daily-loss check compares once-daily snapshots,
 not true intraday monitoring. See `TRADING_RULES.md` > Known Implementation
 Gaps for details.
@@ -62,6 +69,7 @@ Gaps for details.
 |---|---|
 | Pull live portfolio/cash from Trading212 | ✅ working (`t212_portfolio.py`) |
 | Technical screener over a watchlist | ✅ working (`screener.py`) |
+| Earnings-date metric + pre-earnings blackout | ✅ in the screener (`screener.py`); ❌ not yet enforced in `trading_bot.py` |
 | Buy rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
 | Sell / exit rule engine (dry run) | ✅ working (`trading_bot.py`) — **places no real orders** |
 | Live order execution (buy or sell) | ❌ not implemented — no code path calls Trading212's order-placement endpoint at all |
@@ -103,9 +111,12 @@ Quick summary of what's actually implemented today:
   trading-day re-entry cooldown), Bull Market Profit (+3% → sell 50%, once per
   position instance), Breakout Profit (+10% + new 20d high + volume → sell 25%,
   arms the trailing stop), Trailing Stop (highest price since arming − 2×ATR14).
-- **Known gaps**: no free data source for earnings-date or live bid/ask spread,
-  so those two Buy Rule 1 conditions aren't enforced yet — flagged explicitly in
-  the bot's own output every run, not silently skipped.
+- **Earnings dates**: the screener shows each ticker's next earnings date and
+  drops tickers with earnings within 3 trading days from its candidate list.
+- **Known gaps**: no free data source for live bid/ask spread, and the earnings
+  filter isn't wired into `trading_bot.py` yet, so those two Buy Rule 1
+  conditions aren't enforced by the bot — flagged explicitly in the bot's own
+  output every run, not silently skipped.
 
 Max exposure / min cash is settled: **80% max invested / 20% min cash**,
 consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
@@ -116,9 +127,9 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 | File | Purpose |
 |---|---|
 | `t212_portfolio.py` | Pulls live positions + cash from the Trading212 API (Basic auth: key+secret). |
-| `market_data.py` | Free, no-key market data + indicators (SMA/EMA/RSI/MACD/ATR) via Yahoo Finance's public chart endpoint. |
+| `market_data.py` | Free, no-key market data + indicators (SMA/EMA/RSI/MACD/ATR) via Yahoo Finance's public chart endpoint, plus next earnings date (`fetch_next_earnings`) via Yahoo's `quoteSummary` endpoint. |
 | `watchlist.csv` | The whitelist — only these tickers are ever screened or traded. Columns: `t212_ticker, yahoo_symbol, name, notes`. 19 tickers across tech, healthcare, banking, financials, energy, and consumer staples (2026-09-18: deliberately excludes weapons/defense, adult entertainment, and alcohol/pork producers). |
-| `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic. Not a prediction — a filter. |
+| `screener.py` | Scores watchlist tickers 0–100 on a trend + mean-reversion heuristic and shows each one's next earnings date, excluding pre-earnings tickers from the candidate list. Not a prediction — a filter. |
 | `trading_bot.py` | Buy + sell dry-run engine implementing `TRADING_RULES.md` (all buy rules, all exit rules, exposure/drawdown/daily-loss gates). No order-placement call exists anywhere in the repo. |
 | `config.py` / `rules_config.json` | Editable strategy parameters (position caps, drawdown thresholds, buy/exit rule amounts and percentages). `trading_bot.py` reads this at import time; the web UI writes to it. |
 | `webapp.py` + `templates/` | Local web UI (Flask, `127.0.0.1` only) to edit rule values and browse the trade log with full indicator context. See below. |
@@ -181,6 +192,26 @@ identically against either.
   adjusted-close handling for splits/dividends.
 - `--range` accepts `1y`/`2y`/`5y`/`10y`/`max`; the first 200 trading days of
   whatever you fetch are warmup for SMA200 and aren't simulated.
+
+## Earnings dates
+
+The screener reports, for every ticker:
+
+| Field | Meaning |
+|---|---|
+| `earnings: YYYY-MM-DD (in N trading days)` | Next scheduled earnings date. Trading days count weekdays only and ignore market holidays. |
+| `, estimated` | Yahoo marks the date as an estimate, or gives only a date range (the earliest day is used — the conservative choice). |
+| `none scheduled` | Yahoo lists no upcoming date (usual for ETFs). Not treated as a blackout. |
+| `UNVERIFIED` | The date couldn't be fetched (network, rate limit, Yahoo change). Never treated as safe — check it manually before buying. |
+| `<-- EARNINGS BLACKOUT` | Earnings are within the blackout window (default 3 trading days, `--earnings-days N`). The ticker is still scored but left out of the candidate list. |
+
+The summary at the end lists the candidates, the tickers excluded for upcoming
+earnings, and any whose date couldn't be verified.
+
+Data source: Yahoo's `quoteSummary` endpoint (`calendarEvents` module). Unlike
+the chart endpoint it needs a session cookie and "crumb" token, which
+`market_data.py` gets once per run. If the screener runs behind a network
+allowlist, allow `fc.yahoo.com` and `query1.finance.yahoo.com`.
 
 ## Web UI
 
@@ -261,7 +292,8 @@ refactor - several were caught by writing this suite (see git history for
   changes.
 - Risk-management rules are meant to override trading signals, not the other
   way around. When a required check can't be verified (e.g. earnings date,
-  spread), the bot says so in its output rather than assuming it passes.
+  spread), the bot and screener say so in their output rather than assuming
+  it passes.
 - This project does **not guarantee profits or financial returns**. Nothing
   here is financial advice. All strategies should be thoroughly backtested and
   paper-traded before any real capital is used.

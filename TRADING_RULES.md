@@ -360,8 +360,11 @@ Not ambiguities in the spec — things the spec requires that free data sources
 can't currently supply. `trading_bot.py` flags these explicitly in its output
 rather than silently assuming they pass:
 
-- **Earnings-date filter** ("no earnings within 3 trading days") — no free,
-  reliable earnings-calendar source wired up yet. Currently NOT enforced.
+- **Earnings-date filter** ("no earnings within 3 trading days") — next
+  earnings dates now come from Yahoo's `calendarEvents` data
+  (`market_data.fetch_next_earnings`). `screener.py` applies the filter and
+  marks unfetchable dates as unverified; `trading_bot.py` does NOT enforce it
+  yet.
 - **Spread <= 0.5% (Buy Rule 1)** — no free live bid/ask feed wired up yet.
   Currently NOT enforced.
 - **Daily portfolio loss (1.5%)** — the bot runs once/day, so this compares
