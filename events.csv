@@ -1,0 +1,23 @@
+date,category,tag,description,window_days
+2022-02-24,geopolitics,russia_ukraine_war,Russia invades Ukraine,20
+2022-03-16,fed,fed_hike_cycle_start,Fed raises rates for the first time since 2018 (+25bp),10
+2022-06-15,fed,fed_hike_75bp,Fed hikes 75bp - largest since 1994,10
+2022-06-10,inflation,cpi_shock,US CPI prints 8.6% YoY (40-year high),10
+2022-10-13,inflation,cpi_shock,US CPI hotter than expected - core at 40-year high,5
+2023-03-10,banking,svb_collapse,Silicon Valley Bank fails,15
+2023-07-26,fed,fed_last_hike,Fed's last hike of the cycle (to 5.25-5.50%),10
+2023-10-07,geopolitics,israel_hamas_war,Hamas attacks Israel; Israel-Gaza war begins,20
+2024-04-01,geopolitics,israel_iran,Israeli strike on Iranian consulate in Damascus,10
+2024-04-13,geopolitics,israel_iran,Iran launches drone and missile attack on Israel,10
+2024-04-19,geopolitics,israel_iran,Israeli strike near Isfahan Iran,10
+2024-08-05,markets,yen_carry_unwind,Global selloff on yen carry-trade unwind; VIX spikes above 60 intraday,10
+2024-09-18,fed,fed_cut_cycle_start,Fed's first cut of the cycle (-50bp),10
+2024-10-01,geopolitics,israel_iran,Iran fires ballistic missiles at Israel,10
+2024-10-26,geopolitics,israel_iran,Israel strikes military targets in Iran,10
+2024-11-05,politics,us_election,US presidential election,10
+2025-01-27,markets,deepseek_selloff,DeepSeek AI model triggers chip-stock selloff,5
+2025-04-02,trade,us_tariffs,US announces sweeping 'Liberation Day' tariffs,10
+2025-04-09,trade,us_tariff_pause,US pauses most new tariffs for 90 days,5
+2025-06-13,geopolitics,israel_iran,Israel launches large-scale strikes on Iran (start of 12-day war),12
+2025-06-22,geopolitics,israel_iran,US strikes Iranian nuclear sites,5
+2025-06-24,geopolitics,israel_iran_ceasefire,Israel-Iran ceasefire takes effect,5

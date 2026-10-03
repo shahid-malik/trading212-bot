@@ -225,3 +225,8 @@ trades.db
 backtest.db
 reports/
 .DS_Store
+
+# factor-analysis outputs
+backtest_reports/
+account_trades.db
+account_reports/
