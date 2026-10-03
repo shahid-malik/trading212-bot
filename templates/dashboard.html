@@ -3,8 +3,8 @@
 {% block content %}
 
 <div class="filters" style="margin-bottom:20px;">
-  <a href="{{ url_for('dashboard', source='live') }}"><button type="button" {% if source != 'backtest' %}style="opacity:1;"{% else %}style="background:#889;" {% endif %}>Live (dry-run)</button></a>
-  <a href="{{ url_for('dashboard', source='backtest') }}"><button type="button" {% if source == 'backtest' %}style="opacity:1;"{% else %}style="background:#889;" {% endif %}>Backtest</button></a>
+  <a href="{{ url_for('dashboard', source='live') }}"><button type="button" class="{% if source == 'backtest' %}secondary{% endif %}">Live (dry-run)</button></a>
+  <a href="{{ url_for('dashboard', source='backtest') }}"><button type="button" class="{% if source != 'backtest' %}secondary{% endif %}">Backtest</button></a>
 </div>
 
 {% if not available %}
@@ -82,8 +82,8 @@
       {% for r in s.rule_accuracy %}
       <tr>
         <td>{{ r.rule }}</td>
-        <td>{{ r.buys_with_signal }}</td>
-        <td>{{ "%.0f%%"|format(r.next_sell_profitable_pct) if r.next_sell_profitable_pct is not none else "no data yet" }}</td>
+        <td class="data">{{ r.buys_with_signal }}</td>
+        <td class="data">{{ "%.0f%%"|format(r.next_sell_profitable_pct) if r.next_sell_profitable_pct is not none else "no data yet" }}</td>
       </tr>
       {% endfor %}
     </tbody>

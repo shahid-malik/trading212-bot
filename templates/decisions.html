@@ -51,13 +51,13 @@
   <tbody>
     {% for r in rows %}
     <tr>
-      <td>{{ r['timestamp'] }}</td>
-      <td>{% if r['trade_id'] %}<a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['trade_id']) }}">{{ r['ticker'] }}</a>{% else %}{{ r['ticker'] }}{% endif %}</td>
+      <td class="data">{{ r['timestamp'] }}</td>
+      <td class="data">{% if r['trade_id'] %}<a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['trade_id']) }}">{{ r['ticker'] }}</a>{% else %}{{ r['ticker'] }}{% endif %}</td>
       <td><span class="badge {% if r['side'] == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ r['side'] }}</span></td>
       <td>{{ r['label'] }}</td>
       <td><span class="badge {% if r['fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['fired'] else 'no' }}</span></td>
       <td>{% if r['fired'] %}<span class="badge {% if r['executed'] %}badge-executed{% else %}badge-notexec{% endif %}">{{ 'yes' if r['executed'] else 'no' }}</span>{% else %}-{% endif %}</td>
-      <td>{{ "%.2f"|format(r['amount_eur']) if r['amount_eur'] is not none else "" }}</td>
+      <td class="data">{{ "%.2f"|format(r['amount_eur']) if r['amount_eur'] is not none else "" }}</td>
       <td class="muted">{{ r['blocks'] or "" }}</td>
     </tr>
     {% else %}

@@ -43,14 +43,14 @@
   <tbody>
     {% for r in rows %}
     <tr>
-      <td>{{ r['t212_ticker'] }}</td>
-      <td>{{ r['yahoo_symbol'] }}</td>
+      <td class="data">{{ r['t212_ticker'] }}</td>
+      <td class="data">{{ r['yahoo_symbol'] }}</td>
       <td>{{ r['name'] }}</td>
       <td class="muted">{{ r['notes'] }}</td>
       <td>
         <form method="post" action="{{ url_for('watchlist_remove') }}" onsubmit="return confirm('Remove {{ r['t212_ticker'] }} from the watchlist?');">
           <input type="hidden" name="t212_ticker" value="{{ r['t212_ticker'] }}">
-          <button type="submit" style="background:#a91c1c;">Remove</button>
+          <button type="submit" class="destructive">Remove</button>
         </form>
       </td>
     </tr>

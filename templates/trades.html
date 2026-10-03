@@ -47,14 +47,14 @@ run, not just the one that produced this trade.</p>
   <tbody>
     {% for r in rows %}
     <tr>
-      <td><a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['id']) }}">{{ r['timestamp'] }}</a></td>
-      <td>{{ r['ticker'] }}</td>
+      <td class="data"><a class="rowlink" href="{{ url_for('trade_detail', trade_id=r['id']) }}">{{ r['timestamp'] }}</a></td>
+      <td class="data">{{ r['ticker'] }}</td>
       <td><span class="badge {% if r['action'] == 'BUY' %}badge-buy{% else %}badge-sell{% endif %}">{{ r['action'] }}</span></td>
       <td>{% if r['dry_run'] %}<span class="badge badge-dry">dry</span>{% else %}real{% endif %}</td>
-      <td>{{ "%.2f"|format(r['order_size_eur']) if r['order_size_eur'] is not none else "" }}</td>
-      <td>{{ "%.2f"|format(r['price']) if r['price'] is not none else "" }}</td>
-      <td>{{ "%.2f"|format(r['avg_price']) if r['avg_price'] is not none else "" }}</td>
-      <td>{{ "%.1f"|format(r['profit_loss_pct']) if r['profit_loss_pct'] is not none else "" }}</td>
+      <td class="data">{{ "%.2f"|format(r['order_size_eur']) if r['order_size_eur'] is not none else "" }}</td>
+      <td class="data">{{ "%.2f"|format(r['price']) if r['price'] is not none else "" }}</td>
+      <td class="data">{{ "%.2f"|format(r['avg_price']) if r['avg_price'] is not none else "" }}</td>
+      <td class="data">{{ "%.1f"|format(r['profit_loss_pct']) if r['profit_loss_pct'] is not none else "" }}</td>
       <td>{{ r['reason'] }}</td>
       <td>{% if r['rule1_fired'] is not none %}<span class="badge {% if r['rule1_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule1_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule2_fired'] is not none %}<span class="badge {% if r['rule2_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule2_fired'] else 'no' }}</span>{% endif %}</td>
@@ -62,7 +62,7 @@ run, not just the one that produced this trade.</p>
       <td>{% if r['rule4_fired'] is not none %}<span class="badge {% if r['rule4_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule4_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule5_fired'] is not none %}<span class="badge {% if r['rule5_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule5_fired'] else 'no' }}</span>{% endif %}</td>
       <td>{% if r['rule6_fired'] is not none %}<span class="badge {% if r['rule6_fired'] %}badge-fired{% else %}badge-blocked{% endif %}">{{ 'yes' if r['rule6_fired'] else 'no' }}</span>{% endif %}</td>
-      <td>{{ "%.1f%%"|format(r['confidence_pct']) if r['confidence_pct'] is not none else "" }}</td>
+      <td class="data">{{ "%.1f%%"|format(r['confidence_pct']) if r['confidence_pct'] is not none else "" }}</td>
       <td>
         {% set rules = all_rules.get(r['id'], []) %}
         {% if rules %}
