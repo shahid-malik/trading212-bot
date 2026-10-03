@@ -20,9 +20,17 @@ Real limitations - see TRADING_RULES.md > Backtesting Limitations:
     day) is NOT written here - only executed trades - to keep the database
     a reasonable size over a multi-year simulation.
 
+Every executed trade is also tagged with macro/market context from factors.py
+(SPY regime, VIX, oil, 10y yield, dollar, gold, inflation proxy / CPI, active
+geopolitical events from events.csv). Saved to backtest.db as trade_factors
+(joinable to trades.id) and positions (one row per round trip with entry_*
+factors), exported to backtest_reports/<timestamp>/, and summarised in a
+results-by-factor table.
+
 Usage:
   python3 backtest.py                    # 5y of history, EUR1000 starting capital
   python3 backtest.py --range 10y --capital 2000
+  python3 backtest.py --set confidence_threshold_pct=70 --set bull_profit_pct=10
 """
 
 from __future__ import annotations
@@ -34,12 +42,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import factors
 import market_data
 import trade_db
 import trading_bot as tb
 
 HERE = Path(__file__).parent
 BACKTEST_DB_PATH = HERE / "backtest.db"
+REPORTS_DIR = HERE / "backtest_reports"
 WARMUP_DAYS = 200  # SMA200 needs this much history before a ticker is evaluated
 
 
@@ -67,6 +77,26 @@ def fetch_all_bars(symbols: list[str], range_: str) -> dict:
     return data
 
 
+def make_fill(trade_id, date, ticker, symbol, side, reason, qty, price, snap, confidence_pct, macro_snap) -> dict:
+    return {"trade_id": trade_id, "date": date, "ticker": ticker, "symbol": symbol, "side": side, "reason": reason,
+            "qty": qty, "price_filled": price, "amount": qty * price, "confidence_pct": confidence_pct,
+            **{c: snap.get(c) for c in factors.STOCK_COLS}, **{c: macro_snap.get(c) for c in factors.MACRO_COLS}}
+
+
+def apply_overrides(overrides: list[str]) -> dict:
+    """--set key=value -> trading_bot module constant KEY (same names as rules_config.json)."""
+    applied = {}
+    for kv in overrides:
+        key, _, val = kv.partition("=")
+        name = key.strip().upper()
+        if not hasattr(tb, name) or not val:
+            sys.exit(f"--set: unknown parameter {key!r} (use rules_config.json names, e.g. confidence_threshold_pct)")
+        current = getattr(tb, name)
+        setattr(tb, name, int(float(val)) if isinstance(current, int) else float(val))
+        applied[key.strip()] = getattr(tb, name)
+    return applied
+
+
 def max_drawdown_pct(conn) -> float:
     conn.row_factory = None
     rows = conn.execute("SELECT total_equity FROM equity_snapshots ORDER BY date").fetchall()
@@ -87,6 +117,9 @@ def run_backtest(range_: str, capital: float) -> None:
     print(f"Fetching {range_} of history for SPY + {len(watchlist)} watchlist ticker(s)...")
     all_symbols = ["SPY"] + [sym for _, sym in watchlist]
     bars_by_symbol = fetch_all_bars(all_symbols, range_)
+    print("Fetching macro factors (VIX, oil, yields, dollar, gold, inflation proxy)...")
+    macro = factors.MacroContext(range_=range_)
+    fills: list[dict] = []
 
     spy_bars = bars_by_symbol.get("SPY")
     if not spy_bars:
@@ -191,7 +224,9 @@ def run_backtest(range_: str, capital: float) -> None:
                     frac = remaining_fraction * d["sell_fraction"]
                     qty = position["quantity"] * frac
                     amount = qty * position["currentPrice"]
-                    tb.log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market, date)
+                    trade_id = tb.log_sell(conn, ticker, symbol, position, snap, d, qty, amount, bull_market, date)
+                    fills.append(make_fill(trade_id, date, ticker, symbol, "SELL", d["label"], qty,
+                                           position["currentPrice"], snap, None, macro.snapshot(date)))
                     trade_log.append({"ticker": ticker, "side": "SELL", "date": date,
                                        "price": position["currentPrice"], "qty": qty, "amount": amount,
                                        "avg_price": position["averagePrice"], "reason": d["label"]})
@@ -231,7 +266,9 @@ def run_backtest(range_: str, capital: float) -> None:
                 continue
 
             qty = amount / snap["price"]
-            tb.log_buy(conn, ticker, symbol, position, snap, conf, amount, bull_market, date)
+            trade_id = tb.log_buy(conn, ticker, symbol, position, snap, conf, amount, bull_market, date)
+            fills.append(make_fill(trade_id, date, ticker, symbol, "BUY", conf["label"], qty, snap["price"],
+                                   snap, conf.get("confidence_pct"), macro.snapshot(date)))
             trade_log.append({"ticker": ticker, "side": "BUY", "date": date, "price": snap["price"],
                                "qty": qty, "amount": amount, "reason": conf["label"]})
 
@@ -273,6 +310,16 @@ def run_backtest(range_: str, capital: float) -> None:
     print(f"Max drawdown:     {dd:.1f}%")
     print(f"Trades: {len([t for t in trade_log if t['side']=='BUY'])} buys, {len(sells)} sells"
           + (f", win rate {win_rate:.0f}%" if win_rate is not None else ""))
+    last_prices = {t: p["last_price"] for t, p in positions.items()}
+    trade_positions = factors.build_positions(fills, last_prices, ts_to_date(spy_bars["dates"][-1]))
+    factors.save_factor_tables(conn, fills, trade_positions)
+    out_dir = REPORTS_DIR / time.strftime("%Y-%m-%dT%H-%M-%S")
+    factors.write_csvs(out_dir, fills, trade_positions)
+    print()
+    print("\n".join(factors.factor_report(trade_positions)))
+    if macro.missing:
+        print("Missing macro factors: " + "; ".join(macro.missing))
+    print(f"\nEvery trade + its factors: backtest.db (trade_factors, positions) and {out_dir.relative_to(HERE)}/")
     print()
     print("Not financial advice. Free daily-bar backtest with no transaction costs or")
     print("slippage modeled, and today's watchlist applied retroactively - see")
@@ -286,7 +333,12 @@ def main() -> None:
     parser.add_argument("--range", default="5y", choices=["1y", "2y", "5y", "10y", "max"],
                          help="How much history to fetch (default 5y; first 200 trading days are warmup, not simulated)")
     parser.add_argument("--capital", type=float, default=1000.0, help="Starting capital (default EUR1000, matches TRADING_RULES.md)")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override a rules_config.json parameter for this run only (repeatable)")
     args = parser.parse_args()
+    applied = apply_overrides(args.set)
+    if applied:
+        print("Overrides for this run: " + ", ".join(f"{k}={v:g}" for k, v in applied.items()))
     run_backtest(args.range, args.capital)
 
 

@@ -40,6 +40,19 @@ analysis.
   (`--earnings-days N` to change) are left out of the candidate list, per the
   "no new buy before earnings" rule. Tickers whose date can't be fetched are
   marked **UNVERIFIED** rather than assumed safe. See [Earnings dates](#earnings-dates).
+- **Macro factors on every backtest trade.** `backtest.py` now tags each
+  executed trade with SPY regime, VIX, oil, 10y yield, dollar, gold, an
+  inflation proxy (CPI when FRED is reachable) and active geopolitical events
+  from `events.csv` (Israel-Iran strikes, Russia-Ukraine, tariffs, Fed, ...),
+  saves them to `backtest.db` (`trade_factors`, `positions`) and CSVs, and
+  prints results broken down by each factor. `--set key=value` overrides any
+  rule parameter for one run. See [Factors saved per trade](#factors-saved-per-trade).
+- **Real account analysis** (`account_history.py`): the same factor tagging
+  and report for your actual Trading212 fills, from the API or the app's CSV
+  export.
+- **Daily buy/sell email** (`daily_trade_email.py`): after each scheduled bot
+  run, emails what it would buy and sell that day plus an equity summary. See
+  [Daily email](#daily-email).
 
 ### v1.0 (2026-09-18)
 
@@ -76,7 +89,7 @@ Gaps for details.
 | Trade logging with full indicator snapshot | ✅ working (`trade_db.py`, SQLite) |
 | Backtesting | ✅ working (`backtest.py`) — reuses the live bot's own rule functions against historical bars |
 | Performance/accuracy KPIs + dashboard | ✅ working (`metrics.py`, web UI Dashboard page) |
-| Automated tests | ✅ 57 tests, no network/DB dependency (`tests/`) |
+| Automated tests | ✅ 95 tests, no network/DB dependency (`tests/`) |
 
 The bot only ever considers tickers listed in `watchlist.csv` — it never scans
 the broader market. Add a ticker there (with its Yahoo Finance symbol) to bring
@@ -138,10 +151,14 @@ consistent everywhere in this repo (`algo.csv`, `parameters.csv`,
 | `export_trades.py` | Dumps `trades.db` to CSV for Excel/pandas analysis. |
 | `backtest.py` | Runs `trading_bot.py`'s exact rule functions against historical daily bars into an isolated `backtest.db`. See Backtesting below. |
 | `metrics.py` | Performance/accuracy KPIs (return, CAGR, drawdown, Sharpe, win rate, profit factor, per-rule signal accuracy) from either `trades.db` or `backtest.db`. |
-| `tests/` | 57 automated tests (stdlib `unittest`, no network/DB dependency) covering indicator math, confidence scoring, exit-rule priority, and KPI math. |
+| `factors.py` | Macro/market context for any date (SPY regime, VIX, oil, yields, dollar, gold, inflation proxy, CPI, events) plus the per-trade factor records, position rebuilding and results-by-factor report used by `backtest.py` and `account_history.py`. |
+| `events.csv` | Editable dated list of geopolitical/macro events (`date,category,tag,description,window_days`). A trade is tagged with every event whose window covers its date. |
+| `account_history.py` | Tags your real Trading212 fills (API or app CSV export) with the same factors and reports results by factor (`account_trades.db`, `account_reports/`). |
+| `daily_trade_email.py` | Emails the day's bot buys/sells + equity (SMTP or Gmail draft). Called by `run_bot.sh`. |
+| `tests/` | 95 automated tests (stdlib `unittest`, no network/DB dependency) covering indicator math, confidence scoring, exit-rule priority, and KPI math. |
 | `TRADING_RULES.md` | The authoritative strategy spec. |
 | `run_screener.sh` / `run_bot.sh` + `launchd` | Daily automation for the screener and dry-run bot (see below). |
-| `gmail_draft.py` / `daily_alert.py` | Optional: create a Gmail draft with the daily screener report. Requires a one-time local OAuth setup (see `gmail_draft.py` docstring) — not yet configured. |
+| `gmail_draft.py` / `daily_alert.py` | Optional: create a Gmail draft with the daily screener report (`daily_trade_email.py --draft` can use the same setup). Requires a one-time local OAuth setup (see `gmail_draft.py` docstring) — not yet configured. |
 
 ## Setup
 
@@ -166,7 +183,7 @@ bearer token. See `t212_portfolio.py`'s `basic_auth_header()`.
 .venv/bin/python3 log_trade.py --ticker MSFT_US_EQ --action BUY --price 495.17 --qty 0.02 --reason "Buy Rule 1 - Trend"
 .venv/bin/python3 export_trades.py trades_export.csv     # dump trade log to CSV
 .venv/bin/python3 backtest.py                            # backtest against historical bars, logs to backtest.db
-.venv/bin/python3 -m unittest discover -s tests -t .     # run the test suite (57 tests, ~instant)
+.venv/bin/python3 -m unittest discover -s tests -t .     # run the test suite (95 tests, ~instant)
 ```
 
 ## Backtesting
@@ -192,6 +209,43 @@ identically against either.
   adjusted-close handling for splits/dividends.
 - `--range` accepts `1y`/`2y`/`5y`/`10y`/`max`; the first 200 trading days of
   whatever you fetch are warmup for SMA200 and aren't simulated.
+
+Try a parameter change for one run without touching `rules_config.json`:
+
+```bash
+.venv/bin/python3 backtest.py --set confidence_threshold_pct=70 --set bull_profit_pct=10
+```
+
+Tuning parameters until a backtest looks best is curve-fitting. Check any
+change on a different `--range` before trusting it.
+
+### Factors saved per trade
+
+Every executed backtest trade gets a row in `backtest.db` → `trade_factors`
+(joins to `trades.id` via `trade_id`), and every round trip (first buy until
+the position is back to zero) a row in `positions` with the factors at entry
+(`entry_*` columns). Both are also written as CSV to
+`backtest_reports/<timestamp>/`, and the run ends with a results-by-factor
+table (count, win rate, average return, P&L per bucket).
+
+| Factor | Source |
+|---|---|
+| price, SMA20/50/200, EMA20, RSI14, MACD/signal/histogram, ATR14, volume, 20d high, 10d return; confidence % | the stock's bars and the bot's scoring |
+| `spy_bull`, `spy_vs_sma200_pct`, `spy_chg20` | SPY |
+| `vix`, `vix_bucket` (calm <15, normal 15-25, fear >25) | ^VIX |
+| `oil`, `oil_chg20` | WTI crude, CL=F |
+| `us10y`, `us10y_chg20_bp` | 10-year Treasury yield, ^TNX |
+| `dxy_chg20`, `gold_chg20` | dollar index DX-Y.NYB, gold GC=F |
+| `infl_proxy_chg60`, `infl_proxy_trend` | TIP/IEF ratio: market-implied inflation expectations |
+| `cpi_yoy` | official US CPI from FRED (only when `fred.stlouisfed.org` is reachable) |
+| `events`, `event_categories`, `days_since_israel_iran` | `events.csv`, which you can extend |
+
+The same tagging works on your real trades:
+
+```bash
+.venv/bin/python3 account_history.py --csv export.csv   # Trading212 app: History > Export
+.venv/bin/python3 account_history.py                    # or straight from the API (.env keys)
+```
 
 ## Earnings dates
 
@@ -258,6 +312,30 @@ Local only (binds to `127.0.0.1`, not exposed to your network). Five pages:
 `reports/bot_latest.txt`. Both are dry-run/read-only with respect to real
 trading, so both are safe to run unattended.
 
+`run_bot.sh` then runs `daily_trade_email.py`, so the same job emails you the
+day's decisions (see below).
+
+### Daily email
+
+Every weekday after the bot runs you get an email titled e.g.
+`T212 bot 2026-10-05: 2 buys, 1 sell` listing each BUY (ticker, amount,
+price, confidence) and SELL (ticker, amount, price, P/L, exit rule), the
+current equity, and the full bot report. The bot is dry-run, so this is a
+to-do list: nothing has been executed in your account.
+
+Setup: add to `.env`
+
+```bash
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=xxxx xxxx xxxx xxxx   # Gmail App Password: Google Account > Security > 2-Step Verification > App passwords
+EMAIL_TO=you@gmail.com              # optional; comma-separate several addresses
+```
+
+Check it without sending: `.venv/bin/python3 daily_trade_email.py --print`.
+Send for a specific day: `--date YYYY-MM-DD`. Use `--draft` to create a Gmail
+draft through `gmail_draft.py`'s OAuth setup instead of SMTP. Failures are
+logged to `daily_trade_email.log`.
+
 Note: launchd-spawned processes are subject to macOS's TCC privacy protections
 for `~/Documents`. If a scheduled job fails with "Operation not permitted",
 grant Full Disk Access to `/bin/bash` in System Settings → Privacy & Security.
@@ -268,7 +346,7 @@ grant Full Disk Access to `/bin/bash` in System Settings → Privacy & Security.
 .venv/bin/python3 -m unittest discover -s tests -t .
 ```
 
-57 tests, stdlib `unittest`, no network calls and no dependency on `trades.db`
+95 tests, stdlib `unittest`, no network calls and no dependency on `trades.db`
 (each test uses its own in-memory SQLite connection or pure function inputs) -
 runs in milliseconds. Covers indicator math (SMA/EMA/RSI/MACD/ATR edge cases:
 insufficient history, flat prices, all-gains/all-losses), the confidence-score
